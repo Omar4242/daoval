@@ -5,6 +5,7 @@ import { logBreakGlass } from '../services/auditService'
 import { patientDisplayName, maskedNationalId } from '../context/PatientContext'
 import BreakGlassModal from '../components/BreakGlassModal'
 import TraceRule from '../components/TraceRule'
+import Brand from '../components/Brand'
 
 export default function SearchResults() {
   const [params] = useSearchParams()
@@ -38,9 +39,7 @@ export default function SearchResults() {
   return (
     <div className="app-shell">
       <div className="topbar">
-        <div className="brand">
-          Daoval <small>DOCTOR PORTAL</small>
-        </div>
+        <Brand label="DOCTOR PORTAL" />
         <Link to="/dashboard" className="btn btn-ghost">
           ← Dashboard
         </Link>

@@ -7,6 +7,7 @@ import { AMENDMENT_REASON_CODES } from '../fhir/codes'
 import PatientBanner from '../components/PatientBanner'
 import SyncStatus from '../components/SyncStatus'
 import TraceRule from '../components/TraceRule'
+import Brand from '../components/Brand'
 
 export default function ViewAmend() {
   const { patientId, encounterId } = useParams()
@@ -73,9 +74,7 @@ export default function ViewAmend() {
   return (
     <div className="app-shell">
       <div className="topbar">
-        <div className="brand">
-          Daoval <small>DOCTOR PORTAL</small>
-        </div>
+        <Brand label="DOCTOR PORTAL" />
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <SyncStatus />
           <Link to={`/patient/${patientId}`} className="btn btn-ghost">

@@ -6,6 +6,7 @@ import { usePatientContext } from '../context/PatientContext'
 import PatientBanner from '../components/PatientBanner'
 import SyncStatus from '../components/SyncStatus'
 import TraceRule from '../components/TraceRule'
+import Brand from '../components/Brand'
 import {
   buildEncounterResource,
   buildVitalsObservations,
@@ -109,9 +110,7 @@ export default function ReviewSign() {
   return (
     <div className="app-shell">
       <div className="topbar">
-        <div className="brand">
-          Daoval <small>DOCTOR PORTAL</small>
-        </div>
+        <Brand label="DOCTOR PORTAL" />
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <SyncStatus />
           <Link to={`/patient/${patientId}/encounter/${encounterId}`} className="btn btn-ghost">

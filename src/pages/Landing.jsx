@@ -1,5 +1,7 @@
 import { Link } from 'react-router-dom'
 import TraceRule from '../components/TraceRule'
+import Brand from '../components/Brand'
+import logoFull from '../assets/logo-full.png'
 
 const PILLARS = [
   {
@@ -20,7 +22,7 @@ export default function Landing() {
   return (
     <div className="app-shell">
       <div className="topbar">
-        <div className="brand">Daoval</div>
+        <Brand />
         <div style={{ display: 'flex', gap: 8 }}>
           <Link to="/sign-in?portal=clinician" className="btn btn-secondary">
             Clinician sign in
@@ -32,6 +34,11 @@ export default function Landing() {
       </div>
 
       <div style={{ maxWidth: 760, margin: '0 auto', padding: '72px 24px 48px', textAlign: 'center' }}>
+        <img
+          src={logoFull}
+          alt="Daoval"
+          style={{ height: 84, width: 'auto', margin: '0 auto 32px', display: 'block' }}
+        />
         <h1 style={{ fontSize: 38, lineHeight: 1.15, marginBottom: 16, letterSpacing: '-0.015em' }}>
           Unifying fragmented patient records, one hospital at a time.
         </h1>

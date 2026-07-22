@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useAuth } from '../../context/AuthContext'
 import * as authApi from '../../services/authApi'
 import TraceRule from '../../components/TraceRule'
+import Brand from '../../components/Brand'
 
 // A starting list, not a hard boundary — the backend only requires a non-empty
 // string, so this can be edited here without a migration if a hospital's structure
@@ -70,9 +71,7 @@ export default function AdminUsers() {
   return (
     <div className="app-shell">
       <div className="topbar">
-        <div className="brand">
-          Daoval <small>ADMINISTRATOR</small>
-        </div>
+        <Brand label="ADMINISTRATOR" />
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <span style={{ fontSize: 13.5, color: 'var(--ink-soft)' }}>{user?.name}</span>
           <button className="btn btn-ghost" onClick={signOut}>

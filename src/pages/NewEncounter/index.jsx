@@ -16,6 +16,7 @@ import ExamSection from './Exam'
 import AssessmentSection from './Assessment'
 import PlanSection from './Plan'
 import PreventiveCareSection from './PreventiveCare'
+import Brand from '../../components/Brand'
 
 const SECTIONS = [
   { id: 'meta', label: 'Visit' },
@@ -121,9 +122,7 @@ export default function NewEncounter() {
   return (
     <div className="app-shell">
       <div className="topbar">
-        <div className="brand">
-          Daoval <small>DOCTOR PORTAL</small>
-        </div>
+        <Brand label="DOCTOR PORTAL" />
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <SyncStatus />
           <span className="hint">{savedAt ? `Autosaved ${savedAt.toLocaleTimeString()}` : 'Not yet saved'}</span>

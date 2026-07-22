@@ -5,6 +5,7 @@ import { listLocal } from '../services/dataService'
 import { patientDisplayName, maskedNationalId } from '../context/PatientContext'
 import SyncStatus from '../components/SyncStatus'
 import TraceRule from '../components/TraceRule'
+import Brand from '../components/Brand'
 
 export default function Dashboard() {
   const { user, signOut } = useAuth()
@@ -42,9 +43,7 @@ export default function Dashboard() {
   return (
     <div className="app-shell">
       <div className="topbar">
-        <div className="brand">
-          Daoval <small>DOCTOR PORTAL</small>
-        </div>
+        <Brand label="DOCTOR PORTAL" />
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <SyncStatus />
           <span style={{ fontSize: 13.5, color: 'var(--ink-soft)' }}>{user?.name}</span>

@@ -165,8 +165,8 @@ button {
   color: var(--primary-dark);
   letter-spacing: -0.01em;
   display: flex;
-  align-items: baseline;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
 }
 
 .topbar .brand small {
@@ -174,6 +174,28 @@ button {
   font-size: 10px;
   color: var(--ink-soft);
   letter-spacing: 0.08em;
+}
+
+.brand-word {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.brand-logo {
+  height: 26px;
+  width: auto;
+  flex-shrink: 0;
+}
+
+.topbar .brand.brand-lg,
+.brand.brand-lg {
+  font-size: 26px;
+  gap: 10px;
+}
+
+.brand-lg .brand-logo {
+  height: 34px;
 }
 
 .page {

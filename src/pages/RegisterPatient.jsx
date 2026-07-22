@@ -4,6 +4,7 @@ import { saveResource, listLocal } from '../services/dataService'
 import { buildPatientResource, buildConsentResource } from '../fhir/mappers'
 import { GENDER_CODES, MARITAL_STATUS_CODES, LANGUAGE_CODES } from '../fhir/codes'
 import TraceRule from '../components/TraceRule'
+import Brand from '../components/Brand'
 
 const empty = {
   fullName: '',
@@ -65,9 +66,7 @@ export default function RegisterPatient() {
   return (
     <div className="app-shell">
       <div className="topbar">
-        <div className="brand">
-          Daoval <small>DOCTOR PORTAL</small>
-        </div>
+        <Brand label="DOCTOR PORTAL" />
         <Link to="/dashboard" className="btn btn-ghost">
           ← Dashboard
         </Link>
