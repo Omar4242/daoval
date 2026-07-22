@@ -1,0 +1,65 @@
+# Full stack for a single small VM: Postgres + backend + frontend/TLS.
+# Local dev:    docker compose up --build
+# Production:   docker compose -f docker-compose.yml up -d --build
+#                (with a real DOMAIN and strong POSTGRES_PASSWORD in .env)
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: daoval
+      POSTGRES_USER: daoval
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    # Not published to the host — only reachable by other containers on this
+    # network. Nothing outside the VM can talk to Postgres directly.
+    networks: [internal]
+
+  backend:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://daoval:${POSTGRES_PASSWORD}@db:5432/daoval
+      PGSSL: "disable" # container-to-container on the same compose network, not over the internet
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-*}
+      PORT: 3001
+      NODE_ENV: ${NODE_ENV:-development} # switch to "production" once SES_SENDER_EMAIL is set and verified — until then, "development" prints MFA codes to `docker compose logs backend` instead of emailing them
+      JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET in .env - generate with openssl rand -base64 48}"
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    depends_on: [db]
+    networks: [internal]
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        VITE_FHIR_BASE_URL: /fhir
+        VITE_TENANT_ID: ${VITE_TENANT_ID:-default}
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on: [backend]
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [internal]
+
+networks:
+  internal:
+
+volumes:
+  db_data:
+  caddy_data:
+  caddy_config:

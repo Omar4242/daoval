@@ -1,0 +1,22 @@
+# Stage 1: build the static React bundle.
+FROM node:20-alpine AS build
+
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm install --no-audit --no-fund
+
+COPY . .
+# Baked into the JS bundle at build time by Vite. In this deployment the frontend and
+# /fhir are served from the same origin via Caddy, so this is just "/fhir" — no
+# cross-origin calls, no CORS surface to worry about in production.
+ARG VITE_FHIR_BASE_URL=/fhir
+ARG VITE_TENANT_ID=default
+ENV VITE_FHIR_BASE_URL=$VITE_FHIR_BASE_URL
+ENV VITE_TENANT_ID=$VITE_TENANT_ID
+RUN npm run build
+
+# Stage 2: serve it (and reverse-proxy /fhir to the backend) with Caddy, which also
+# handles automatic TLS via Let's Encrypt.
+FROM caddy:2-alpine
+COPY --from=build /app/dist /srv
+COPY Caddyfile /etc/caddy/Caddyfile

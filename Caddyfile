@@ -1,0 +1,30 @@
+{$DOMAIN:localhost} {
+	encode gzip
+
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+	}
+
+	# Order matters: handle blocks are evaluated in the order written and the first
+	# match wins, so the API routes must come before the catch-all static handler.
+	handle /fhir/* {
+		reverse_proxy backend:3001
+	}
+
+	handle /auth/* {
+		reverse_proxy backend:3001
+	}
+
+	handle /healthz {
+		reverse_proxy backend:3001
+	}
+
+	# Catch-all: everything else is the static SPA build.
+	handle {
+		root * /srv
+		file_server
+		try_files {path} /index.html
+	}
+}
