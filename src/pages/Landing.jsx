@@ -21,9 +21,14 @@ export default function Landing() {
     <div className="app-shell">
       <div className="topbar">
         <div className="brand">Daoval</div>
-        <Link to="/sign-in" className="btn btn-primary">
-          Sign in
-        </Link>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Link to="/sign-in?portal=clinician" className="btn btn-secondary">
+            Clinician sign in
+          </Link>
+          <Link to="/sign-in?portal=admin" className="btn btn-primary">
+            Administrator sign in
+          </Link>
+        </div>
       </div>
 
       <div style={{ maxWidth: 760, margin: '0 auto', padding: '72px 24px 48px', textAlign: 'center' }}>
@@ -34,9 +39,14 @@ export default function Landing() {
           Daoval connects your hospital's clinical documentation into a single, FHIR-structured record —
           so the next clinician who sees this patient isn't starting from zero.
         </p>
-        <Link to="/sign-in" className="btn btn-primary" style={{ fontSize: 15, padding: '11px 24px' }}>
-          Sign in to Daoval
-        </Link>
+        <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
+          <Link to="/sign-in?portal=clinician" className="btn btn-secondary" style={{ fontSize: 15, padding: '11px 24px' }}>
+            I'm a doctor or nurse
+          </Link>
+          <Link to="/sign-in?portal=admin" className="btn btn-primary" style={{ fontSize: 15, padding: '11px 24px' }}>
+            I'm an administrator
+          </Link>
+        </div>
       </div>
 
       <div style={{ maxWidth: 800, margin: '0 auto', padding: '0 24px 24px' }}>

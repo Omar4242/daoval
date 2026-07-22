@@ -10,9 +10,11 @@ import * as auth from './authService.js'
 
 const PORT = Number(process.env.PORT) || 3001
 const BASE_PATH = '/fhir'
-// In production this should be your real frontend origin (e.g. https://app.daoval.com),
-// not '*'. '*' is fine for local dev only.
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || '*'
+// In production this must be your real frontend origin (e.g. https://app.daoval.com).
+// Can't default to '*' anymore now that /fhir/* requires the session cookie —
+// browsers refuse 'Access-Control-Allow-Origin: *' together with credentialed
+// requests. Defaults to the Vite dev server's origin for local `npm run dev`.
+const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'http://localhost:5173'
 
 await store.load()
 await store.seedIfEmpty()
@@ -43,7 +45,11 @@ function send(res, status, body, extraHeaders = {}, contentType = 'application/f
   const payload = body == null ? '' : JSON.stringify(body)
   res.writeHead(status, {
     'Content-Type': contentType,
+    // Credentialed requests (the session cookie) can't use '*' — browsers reject that
+    // combination. ALLOWED_ORIGIN must be a real origin in any deployment that isn't
+    // same-origin-via-Caddy (see .env.production.example).
     'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
+    'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Tenant-Id',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     // Baseline hardening. None of these are HIPAA-specific by themselves, but there's
@@ -147,6 +153,7 @@ function rewriteReferences(resource, idMap) {
 const server = createServer(async (req, res) => {
   const remoteAddr = req.socket.remoteAddress
   let status = 500
+  let currentUser = null // set once a /fhir/* request passes the session check below
 
   const finish = (code, body, extraHeaders, contentType) => {
     status = code
@@ -287,6 +294,16 @@ const server = createServer(async (req, res) => {
     if (!url.pathname.startsWith(BASE_PATH)) {
       return finish(404, operationOutcome(404, `Unknown path. This server is mounted at ${BASE_PATH}`))
     }
+
+    // ---- everything under /fhir/* carries PHI: require a valid session for all of
+    // it, including the metadata/capability check. Only /healthz and /auth/* (handled
+    // above) are reachable without one. ----
+    const current = auth.getUserFromRequest(req)
+    if (!current) {
+      return finish(401, operationOutcome(401, 'Authentication required.'))
+    }
+    currentUser = current
+
     const rest = url.pathname.slice(BASE_PATH.length).replace(/^\/+/, '')
     const segments = rest.split('/').filter(Boolean)
 
@@ -339,7 +356,7 @@ const server = createServer(async (req, res) => {
     finish(500, operationOutcome(500, e.message || 'Internal error'))
   } finally {
     // Fire-and-forget: never let audit logging block or fail the response.
-    logAccess({ method: req.method, path: req.url, status, remoteAddr }).catch(() => {})
+    logAccess({ method: req.method, path: req.url, status, remoteAddr, userRef: currentUser?.id || null }).catch(() => {})
   }
 })
 

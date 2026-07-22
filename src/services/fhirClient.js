@@ -41,6 +41,7 @@ export async function ping(timeoutMs = 3000) {
     const res = await fetch(`${BASE_URL}/metadata`, {
       headers: headers(),
       signal: controller.signal,
+      credentials: 'include',
     })
     return res.ok
   } catch {
@@ -54,6 +55,7 @@ export async function createResource(resourceType, resource) {
   const res = await fetch(`${BASE_URL}/${resourceType}`, {
     method: 'POST',
     headers: headers(),
+    credentials: 'include',
     body: JSON.stringify(resource),
   })
   return handle(res)
@@ -63,6 +65,7 @@ export async function updateResource(resourceType, id, resource) {
   const res = await fetch(`${BASE_URL}/${resourceType}/${id}`, {
     method: 'PUT',
     headers: headers(),
+    credentials: 'include',
     body: JSON.stringify(resource),
   })
   return handle(res)
@@ -71,6 +74,7 @@ export async function updateResource(resourceType, id, resource) {
 export async function readResource(resourceType, id) {
   const res = await fetch(`${BASE_URL}/${resourceType}/${id}`, {
     headers: headers(),
+    credentials: 'include',
   })
   return handle(res)
 }
@@ -80,6 +84,7 @@ export async function searchResource(resourceType, params = {}) {
   const qs = new URLSearchParams(params).toString()
   const res = await fetch(`${BASE_URL}/${resourceType}?${qs}`, {
     headers: headers(),
+    credentials: 'include',
   })
   const bundle = await handle(res)
   return (bundle?.entry || []).map((e) => e.resource)
@@ -90,6 +95,7 @@ export async function submitBundle(bundle) {
   const res = await fetch(`${BASE_URL}`, {
     method: 'POST',
     headers: headers(),
+    credentials: 'include',
     body: JSON.stringify(bundle),
   })
   return handle(res)

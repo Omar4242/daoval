@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import TraceRule from '../components/TraceRule'
 
@@ -11,9 +11,35 @@ function landingPathFor(role) {
   return '/dashboard'
 }
 
+// The "portal" is purely a framing choice for which entry point someone clicked on
+// the landing page — copy and icon only. It never changes what the form submits or
+// how the server decides where to send someone; that's still 100% driven by the
+// account's real role, returned only after password + MFA succeed. A doctor who
+// lands here via the administrator button just gets routed to /dashboard like normal.
+const PORTAL_COPY = {
+  admin: {
+    heading: 'Administrator sign in',
+    sub: 'Manage provisioned accounts for your clinic.',
+  },
+  clinician: {
+    heading: 'Clinician sign in',
+    sub: 'Sign in to document and review patient encounters.',
+  },
+  default: {
+    heading: 'Sign in',
+    sub: 'Sign in as a healthcare worker or administrator — your account already knows which.',
+  },
+}
+
 export default function SignIn() {
   const { submitCredentials, submitCode } = useAuth()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const portal =
+    searchParams.get('portal') === 'admin' || searchParams.get('portal') === 'clinician'
+      ? searchParams.get('portal')
+      : 'default'
+  const copy = PORTAL_COPY[portal]
   const [step, setStep] = useState('credentials')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -58,10 +84,10 @@ export default function SignIn() {
             className="brand"
             style={{ justifyContent: 'center', fontSize: 30, marginBottom: 10, letterSpacing: '-0.015em' }}
           >
-            Welcome to Daoval
+            {copy.heading}
           </div>
           <p className="hint" style={{ fontSize: 13.5 }}>
-            Sign in as a healthcare worker or administrator — your account already knows which.
+            {copy.sub}
           </p>
         </div>
         <TraceRule animate tall />
@@ -83,6 +109,7 @@ export default function SignIn() {
               </button>
               <p className="hint" style={{ marginTop: 14, textAlign: 'center' }}>
                 Accounts are provisioned by your clinic administrator.
+                {portal !== 'default' && ' You\u2019ll land on the right workspace for your account either way.'}
               </p>
             </form>
           ) : (
