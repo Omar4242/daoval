@@ -131,10 +131,18 @@ export async function createChallenge(userId, purpose) {
   return { challengeId: result.rows[0].id, code }
 }
 
-export async function verifyChallenge(challengeId, code) {
+export async function verifyChallenge(challengeId, code, expectedPurpose) {
   const result = await pool.query(`SELECT * FROM login_challenges WHERE id = $1`, [challengeId])
   const challenge = result.rows[0]
   if (!challenge) return { ok: false, error: 'Code expired or invalid. Request a new one.' }
+  // A login code must not be usable to satisfy a reauth prompt, and vice versa — the
+  // two are different security boundaries (one asserts identity, the other asserts
+  // "still you, mid-session") even though the challenge storage/verification
+  // mechanics are shared. Without this check, whichever endpoint got called first
+  // would silently accept a code that was emailed for the other purpose.
+  if (expectedPurpose && challenge.purpose !== expectedPurpose) {
+    return { ok: false, error: 'Code expired or invalid. Request a new one.' }
+  }
   if (challenge.consumed) return { ok: false, error: 'This code was already used. Request a new one.' }
   if (new Date(challenge.expires_at) < new Date()) return { ok: false, error: 'Code expired. Request a new one.' }
   if (challenge.attempts >= MAX_OTP_ATTEMPTS) {

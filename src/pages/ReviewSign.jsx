@@ -29,8 +29,8 @@ export default function ReviewSign() {
 
   useEffect(() => {
     getPatient(patientId).then(setPatient)
-    const draft = localStorage.getItem(`daoval:draft:${encounterId}`)
-    if (draft) setForm(JSON.parse(draft))
+    const enc = getLocal('Encounter', encounterId)
+    if (enc?._draftForm) setForm(enc._draftForm)
   }, [patientId, encounterId, setPatient])
 
   if (!form) {
@@ -99,8 +99,9 @@ export default function ReviewSign() {
 
     resources.push({ resourceType: 'Provenance', resource: buildProvenanceResource(encounterId, user) })
 
+    // Note: the finished Encounter resource built above has no _draftForm on it, so
+    // this submission naturally clears the draft — no separate cleanup step needed.
     await saveEncounterBundle(resources)
-    localStorage.removeItem(`daoval:draft:${encounterId}`)
     setSigning(false)
     navigate(`/patient/${patientId}/encounter/${encounterId}/view`)
   }

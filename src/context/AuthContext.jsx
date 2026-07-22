@@ -12,9 +12,9 @@ export function AuthProvider({ children }) {
   const [locked, setLocked] = useState(false)
   const idleTimer = useRef(null)
 
-  // Restore session from the HttpOnly cookie on first load (there's nothing in
-  // localStorage/sessionStorage to read anymore — the browser sends the cookie
-  // automatically and the server tells us who that is).
+  // Restore session from the HttpOnly cookie on first load — the browser sends the
+  // cookie automatically and the server tells us who that is. Nothing client-side
+  // storage related is read here at all.
   useEffect(() => {
     authApi.me().then((res) => {
       if (res.ok) setUser(res.user)

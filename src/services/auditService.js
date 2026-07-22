@@ -1,8 +1,8 @@
 // Every read/write of patient data is logged as a FHIR AuditEvent, per spec section 11.
-// Written through the same local-first path as clinical data so audit entries survive
-// being offline too, and get flushed to the server by the same sync worker.
+// Written through the same in-memory-first path as clinical data so audit entries
+// survive being offline too, and get flushed to the server by the same sync worker.
 
-import * as local from './localStore'
+import * as local from './memoryStore'
 
 let currentUser = null
 

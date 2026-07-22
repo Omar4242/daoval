@@ -60,9 +60,18 @@ export default function NewEncounter() {
 
   useEffect(() => {
     if (!encounterId) return
-    // Resume an existing draft.
+    // Resume an existing draft. The full clinical form (vitals/allergies/exam/etc.,
+    // not just visit meta) travels as `_draftForm` on the Encounter resource itself,
+    // so it's already wherever the Encounter is — synced to the server when online,
+    // or sitting in the in-memory outbox when it isn't. If we have a full draft,
+    // prefer it wholesale; otherwise fall back to reconstructing just the visit
+    // meta from the FHIR fields (e.g. an encounter that was never drafted here).
     const enc = getLocal('Encounter', encounterId)
     if (!enc) return
+    if (enc._draftForm) {
+      setForm(enc._draftForm)
+      return
+    }
     setForm((f) => ({
       ...f,
       meta: {
@@ -88,30 +97,16 @@ export default function NewEncounter() {
 
   async function autosave() {
     if (!patientId) return
-    const resource = buildEncounterResource(patientId, form.meta, encId)
+    // The full clinical form (vitals/allergies/exam/etc. are only turned into their
+    // own FHIR resources at Review & Sign) rides along as `_draftForm` on the
+    // Encounter resource so it's autosaved through the normal save path — no
+    // separate local-only storage needed.
+    const resource = { ...buildEncounterResource(patientId, form.meta, encId), _draftForm: form }
     const saved = await saveResource('Encounter', resource)
     setEncId(saved.id)
     setSavedAt(new Date())
-    // keep localStorage-only draft mirror of the full clinical form (vitals/allergies/etc. are
-    // only turned into their own FHIR resources at Review & Sign, but we persist the working
-    // draft now so a browser refresh never loses documentation).
-    localStorage.setItem(`daoval:draft:${saved.id}`, JSON.stringify(form))
     return saved.id
   }
-
-  useEffect(() => {
-    if (encId) {
-      const draft = localStorage.getItem(`daoval:draft:${encId}`)
-      if (draft) {
-        try {
-          setForm(JSON.parse(draft))
-        } catch {
-          /* ignore corrupt draft */
-        }
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   async function goToReview() {
     clearTimeout(saveTimer.current)

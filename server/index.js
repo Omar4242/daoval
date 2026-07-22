@@ -206,7 +206,7 @@ const server = createServer(async (req, res) => {
 
       if (req.method === 'POST' && authPath === 'verify') {
         const body = await readBody(req)
-        const result = await auth.verifyChallenge(body?.challengeId, body?.code || '')
+        const result = await auth.verifyChallenge(body?.challengeId, body?.code || '', 'login')
         if (!result.ok) return finish(401, { error: result.error })
 
         const user = await auth.findUserById(result.userId)
@@ -267,8 +267,13 @@ const server = createServer(async (req, res) => {
         const current = auth.getUserFromRequest(req)
         if (!current) return finish(401, { error: 'Not signed in.' })
         const body = await readBody(req)
-        const result = await auth.verifyChallenge(body?.challengeId, body?.code || '')
+        const result = await auth.verifyChallenge(body?.challengeId, body?.code || '', 'reauth')
         if (!result.ok) return finish(401, { error: result.error })
+        // A reauth challenge must belong to the person currently holding this
+        // session — otherwise anyone who learns another user's challengeId+code
+        // (e.g. a shared workstation, a leaked link) could use it to clear their
+        // own idle-lock instead of that user's.
+        if (result.userId !== current.id) return finish(401, { error: 'Code expired or invalid. Request a new one.' })
         // Refresh the session so the 12h expiry doesn't creep up on someone mid-shift.
         const user = await auth.findUserById(current.id)
         const token = auth.signSession(user)

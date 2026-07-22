@@ -1,12 +1,12 @@
-// Every screen in the app talks to *this* module, never to fhirClient or localStore
-// directly. Writes land in local storage immediately (so the UI and autosave never
-// block on network), and are mirrored to the AWS-hosted HAPI FHIR server in the
+// Every screen in the app talks to *this* module, never to fhirClient or memoryStore
+// directly. Writes land in the in-memory mirror immediately (so the UI and autosave
+// never block on network), and are mirrored to the AWS-hosted HAPI FHIR server in the
 // background. Reads prefer the server when it's reachable (so a second device / the
-// clinic's other machines see up-to-date data) and fall back to the local mirror when
-// it isn't.
+// clinic's other machines see up-to-date data) and fall back to the in-memory mirror
+// when it isn't. Note the mirror does not survive a page refresh — see memoryStore.js.
 
 import * as fhir from './fhirClient'
-import * as local from './localStore'
+import * as local from './memoryStore'
 import { logAuditEvent } from './auditService'
 
 const listeners = new Set()

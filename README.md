@@ -7,10 +7,12 @@ clinical encounter documentation, built from the v1.1 (HIPAA/FHIR R4) specificat
 
 - **React 18 + Vite**, React Router for the 8-screen flow in the spec.
 - **No UI kit** — plain CSS with design tokens in `src/index.css`.
-- **Storage: local-first, server-synced.** Every write lands in `localStorage`
-  immediately (so the UI, autosave, and offline use never block on network), then is
-  mirrored to a **HAPI FHIR R4 server** — the one you'll run on AWS — in the background.
-  A small outbox/sync worker replays anything that couldn't reach the server yet.
+- **Storage: in-memory-first, server-synced.** Every write lands in an in-memory
+  mirror immediately (so the UI, autosave, and offline use never block on network),
+  then is mirrored to a **HAPI FHIR R4 server** — the one you'll run on AWS — in the
+  background. A small outbox/sync worker replays anything that couldn't reach the
+  server yet. Note this mirror does not survive a page refresh (no localStorage/
+  IndexedDB) — it's session-only durability, not offline persistence across reloads.
 
 ## Getting started (working demo, two terminals)
 
@@ -53,8 +55,9 @@ described below, now actually exercisable against a real server round-trip.
   (`create`, `update`, `read`, `search`, transaction `Bundle` submit, and a `/metadata`
   ping used for online/offline detection). This is the only file that knows the HAPI
   FHIR wire format.
-- **`src/services/localStore.js`** — a `localStorage`-backed mirror per resource type,
-  plus an **outbox** queue of writes that haven't reached the server yet.
+- **`src/services/memoryStore.js`** — an in-memory mirror per resource type, plus an
+  **outbox** queue of writes that haven't reached the server yet. Lives only for the
+  current page load — no browser storage involved.
 - **`src/services/dataService.js`** — the module every screen actually calls
   (`saveResource`, `saveEncounterBundle`, `findPatients`, `getPatient`,
   `getEncountersForPatient`). It writes local first, tries the server, queues on
@@ -155,7 +158,7 @@ server/
   store.js        JSON-file-backed resource store + search
   data/db.json    generated on first run; delete to reset
 src/
-  services/       fhirClient.js, localStore.js, dataService.js, auditService.js
+  services/       fhirClient.js, memoryStore.js, dataService.js, auditService.js
   fhir/           codes.js (value sets), mappers.js (form → FHIR resource)
   context/        AuthContext, PatientContext
   components/     PatientBanner, SyncStatus, CodeTypeahead, BreakGlassModal, ReauthModal
