@@ -28,7 +28,10 @@ cd "$COMPOSE_DIR"
 echo "[$(date)] Starting backup: ${FILENAME}"
 
 # Dump straight out of the running `db` container, compress on the way to disk.
-docker compose exec -T db pg_dump -U daoval -d daoval | gzip > "$LOCAL_PATH"
+# --clean --if-exists makes the dump include DROP statements before each CREATE,
+# so restoring into a database that already has this schema actually replaces it
+# instead of erroring out with "relation already exists" / duplicate key errors.
+docker compose exec -T db pg_dump -U daoval -d daoval --clean --if-exists | gzip > "$LOCAL_PATH"
 
 if [ ! -s "$LOCAL_PATH" ]; then
   echo "[$(date)] ERROR: backup file is empty — aborting upload." >&2
