@@ -215,9 +215,44 @@ const server = createServer(async (req, res) => {
         const token = auth.signSession(user)
         return finish(
           200,
-          { user: { id: user.id, name: user.name, email: user.email, role: user.role } },
+          {
+            user: {
+              id: user.id,
+              name: user.name,
+              email: user.email,
+              role: user.role,
+              mustChangePassword: user.force_password_change,
+            },
+          },
           { 'Set-Cookie': auth.sessionCookie(token) }
         )
+      }
+
+      if (req.method === 'POST' && authPath === 'change-password') {
+        const current = auth.getUserFromRequest(req)
+        if (!current) return finish(401, { error: 'Not signed in.' })
+        const body = await readBody(req)
+        const currentPassword = body?.currentPassword || ''
+        const newPassword = body?.newPassword || ''
+
+        const user = await auth.findUserById(current.id)
+        if (!user) return finish(401, { error: 'Account no longer active.' })
+
+        const validCurrent = await auth.verifyPasswordHash(currentPassword, user.password_hash)
+        if (!validCurrent) return finish(401, { error: 'Current password is incorrect.' })
+        if (newPassword.length < 12) return finish(400, { error: 'New password must be at least 12 characters.' })
+        if (newPassword === currentPassword) {
+          return finish(400, { error: 'New password must be different from the current one.' })
+        }
+
+        const newHash = await auth.hashPassword(newPassword)
+        await auth.updatePassword(user.id, newHash)
+
+        // Refresh the session so forcePasswordChange flips to false immediately,
+        // without requiring the person to log out and back in.
+        const refreshed = await auth.findUserById(user.id)
+        const token = auth.signSession(refreshed)
+        return finish(200, { ok: true }, { 'Set-Cookie': auth.sessionCookie(token) })
       }
 
       if (req.method === 'POST' && authPath === 'reauth/request') {
@@ -301,6 +336,13 @@ const server = createServer(async (req, res) => {
     const current = auth.getUserFromRequest(req)
     if (!current) {
       return finish(401, operationOutcome(401, 'Authentication required.'))
+    }
+    if (current.forcePasswordChange) {
+      // The frontend already redirects to /change-password, but that's a UX
+      // convenience, not the actual enforcement — someone could otherwise call the
+      // API directly with a valid session cookie from a temp-password account and
+      // never be forced through the change. This is the real boundary.
+      return finish(403, operationOutcome(403, 'Password must be changed before accessing patient data.'))
     }
     currentUser = current
 

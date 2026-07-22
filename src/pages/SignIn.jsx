@@ -6,8 +6,9 @@ import TraceRule from '../components/TraceRule'
 // Where each role lands after a successful sign-in. Decided by the account's real
 // stored role (returned by the server after MFA), not by anything the person picked
 // before authenticating.
-function landingPathFor(role) {
-  if (role === 'administrator') return '/admin/users'
+function landingPathFor(user) {
+  if (user?.mustChangePassword) return '/change-password'
+  if (user?.role === 'administrator') return '/admin/users'
   return '/dashboard'
 }
 
@@ -65,7 +66,7 @@ export default function SignIn() {
     const res = await submitCode(challengeId, code)
     setSubmitting(false)
     if (!res.ok) return setError(res.error)
-    navigate(landingPathFor(res.user?.role))
+    navigate(landingPathFor(res.user))
   }
 
   return (

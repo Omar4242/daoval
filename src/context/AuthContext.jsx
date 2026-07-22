@@ -72,6 +72,13 @@ export function AuthProvider({ children }) {
     return { ok: true }
   }
 
+  async function submitPasswordChange(currentPassword, newPassword) {
+    const res = await authApi.changePassword(currentPassword, newPassword)
+    if (!res.ok) return { ok: false, error: res.error }
+    setUser((u) => (u ? { ...u, mustChangePassword: false } : u))
+    return { ok: true }
+  }
+
   async function signOut() {
     await authApi.logout()
     setUser(null)
@@ -88,6 +95,7 @@ export function AuthProvider({ children }) {
         submitCode,
         requestReauthCode,
         submitReauthCode,
+        submitPasswordChange,
         signOut,
       }}
     >

@@ -38,6 +38,10 @@ export function verifyReauth(challengeId, code) {
   return request('reauth/verify', { method: 'POST', body: JSON.stringify({ challengeId, code }) })
 }
 
+export function changePassword(currentPassword, newPassword) {
+  return request('change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) })
+}
+
 export function logout() {
   return request('logout', { method: 'POST' })
 }

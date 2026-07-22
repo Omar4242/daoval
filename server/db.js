@@ -77,7 +77,7 @@ export async function migrate() {
       role                   text NOT NULL CHECK (role IN ('administrator', 'doctor', 'nurse', 'technician')),
       department             text,
       active                 boolean NOT NULL DEFAULT true,
-      force_password_change text,
+      force_password_change  boolean NOT NULL DEFAULT false,
       created_at             timestamptz NOT NULL DEFAULT now()
     );
 
@@ -101,6 +101,23 @@ export async function migrate() {
     ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
     ALTER TABLE users ADD CONSTRAINT users_role_check
       CHECK (role IN ('administrator', 'doctor', 'nurse', 'technician'));
+
+    -- force_password_change was originally created as a text column and never
+    -- actually used. Convert it to a real boolean, defaulting existing (unset) rows
+    -- to false — nobody currently deployed was ever put through a forced-change
+    -- flow, so false is correct for all of them.
+    DO $$
+    BEGIN
+      IF (SELECT data_type FROM information_schema.columns
+          WHERE table_name = 'users' AND column_name = 'force_password_change') = 'text' THEN
+        ALTER TABLE users ALTER COLUMN force_password_change DROP DEFAULT;
+        ALTER TABLE users ALTER COLUMN force_password_change TYPE boolean
+          USING (force_password_change IS NOT NULL AND force_password_change != '');
+        UPDATE users SET force_password_change = false WHERE force_password_change IS NULL;
+        ALTER TABLE users ALTER COLUMN force_password_change SET NOT NULL;
+        ALTER TABLE users ALTER COLUMN force_password_change SET DEFAULT false;
+      END IF;
+    END $$;
   `)
 }
 

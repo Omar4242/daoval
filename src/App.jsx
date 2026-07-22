@@ -13,7 +13,13 @@ import NewEncounter from './pages/NewEncounter'
 import ReviewSign from './pages/ReviewSign'
 import ViewAmend from './pages/ViewAmend'
 import AdminUsers from './pages/admin/AdminUsers'
+import ChangePassword from './pages/ChangePassword'
 import { useAuth } from './context/AuthContext'
+
+function landingFor(user) {
+  if (user.mustChangePassword) return '/change-password'
+  return user.role === 'administrator' ? '/admin/users' : '/dashboard'
+}
 
 // Root path: signed-out visitors see the marketing landing page; signed-in people
 // skip straight past it to their own workspace (admin panel or clinical dashboard).
@@ -21,7 +27,7 @@ function Root() {
   const { user, loading } = useAuth()
   if (loading) return null
   if (!user) return <Landing />
-  return <Navigate to={user.role === 'administrator' ? '/admin/users' : '/dashboard'} replace />
+  return <Navigate to={landingFor(user)} replace />
 }
 
 // Unknown paths (not the exact root) redirect straight to sign-in or the workspace —
@@ -30,7 +36,7 @@ function NotFound() {
   const { user, loading } = useAuth()
   if (loading) return null
   if (!user) return <Navigate to="/sign-in" replace />
-  return <Navigate to={user.role === 'administrator' ? '/admin/users' : '/dashboard'} replace />
+  return <Navigate to={landingFor(user)} replace />
 }
 
 export default function App() {
@@ -49,6 +55,14 @@ export default function App() {
             <Route path="/patient/:patientId/encounter/:encounterId/review" element={<ProtectedRoute><ReviewSign /></ProtectedRoute>} />
             <Route path="/patient/:patientId/encounter/:encounterId/view" element={<ProtectedRoute><ViewAmend /></ProtectedRoute>} />
             <Route path="/admin/users" element={<ProtectedRoute requireRole="administrator"><AdminUsers /></ProtectedRoute>} />
+            <Route
+              path="/change-password"
+              element={
+                <ProtectedRoute allowPendingPasswordChange>
+                  <ChangePassword />
+                </ProtectedRoute>
+              }
+            />
             <Route path="/" element={<Root />} />
             <Route path="*" element={<NotFound />} />
           </Routes>

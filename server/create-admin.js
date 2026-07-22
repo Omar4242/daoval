@@ -45,7 +45,7 @@ async function main() {
   }
 
   const passwordHash = await hashPassword(password)
-  const user = await createUser({ email, name, role: 'administrator', passwordHash })
+  const user = await createUser({ email, name, role: 'administrator', passwordHash, forcePasswordChange: false })
 
   console.log(`Administrator account created: ${user.email} (${user.id})`)
   console.log('Sign in at the app with this email and password — MFA will email (or log, in dev mode) a code to the same address.')

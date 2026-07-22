@@ -47,7 +47,14 @@ export async function verifyPasswordHash(plain, hash) {
 
 export function signSession(user) {
   return jwt.sign(
-    { sub: user.id, role: user.role, name: user.name, email: user.email, department: user.department || null },
+    {
+      sub: user.id,
+      role: user.role,
+      name: user.name,
+      email: user.email,
+      department: user.department || null,
+      forcePasswordChange: !!user.force_password_change,
+    },
     JWT_SECRET,
     { expiresIn: SESSION_TTL }
   )
@@ -92,7 +99,14 @@ export function getUserFromRequest(req) {
   if (!token) return null
   const payload = verifySession(token)
   if (!payload) return null
-  return { id: payload.sub, role: payload.role, name: payload.name, email: payload.email, department: payload.department }
+  return {
+    id: payload.sub,
+    role: payload.role,
+    name: payload.name,
+    email: payload.email,
+    department: payload.department,
+    forcePasswordChange: !!payload.forcePasswordChange,
+  }
 }
 
 // ---------- one-time email codes ----------
@@ -167,14 +181,21 @@ export async function findUserById(id) {
   return res.rows[0] || null
 }
 
-export async function createUser({ email, name, role, passwordHash, department = null }) {
+export async function createUser({ email, name, role, passwordHash, department = null, forcePasswordChange = true }) {
   const res = await pool.query(
-    `INSERT INTO users (email, name, role, password_hash, department)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, email, name, role, department, active, created_at`,
-    [email, name, role, passwordHash, department]
+    `INSERT INTO users (email, name, role, password_hash, department, force_password_change)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id, email, name, role, department, active, force_password_change, created_at`,
+    [email, name, role, passwordHash, department, forcePasswordChange]
   )
   return res.rows[0]
+}
+
+export async function updatePassword(userId, newPasswordHash) {
+  await pool.query(
+    `UPDATE users SET password_hash = $1, force_password_change = false WHERE id = $2`,
+    [newPasswordHash, userId]
+  )
 }
 
 export async function listUsers() {
