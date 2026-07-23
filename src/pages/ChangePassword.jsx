@@ -1,9 +1,11 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import TraceRule from '../components/TraceRule'
 
 export default function ChangePassword() {
   const { user, submitPasswordChange, signOut } = useAuth()
+  const navigate = useNavigate()
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -20,8 +22,7 @@ export default function ChangePassword() {
     const res = await submitPasswordChange(currentPassword, newPassword)
     setSubmitting(false)
     if (!res.ok) return setError(res.error)
-    // No navigate() needed — App.jsx re-evaluates routing once user.mustChangePassword
-    // flips to false in context, and sends them to their real workspace automatically.
+    navigate(user?.role === 'administrator' ? '/admin/users' : '/dashboard', { replace: true })
   }
 
   return (

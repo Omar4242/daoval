@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { listLocal } from '../services/dataService'
 import { patientDisplayName, maskedNationalId } from '../context/PatientContext'
@@ -53,10 +53,17 @@ export default function Dashboard() {
         </div>
       </div>
       <div className="page">
-        <h1>Find a patient</h1>
-        <p className="hint" style={{ marginBottom: 18 }}>
-          Search by name, National ID, or MRN — or open someone from your recent list below.
-        </p>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+          <div>
+            <h1>Find a patient</h1>
+            <p className="hint" style={{ marginBottom: 18 }}>
+              Search by name, National ID, or MRN — or open someone from your recent list below.
+            </p>
+          </div>
+          <Link to="/register" className="btn btn-primary" style={{ flexShrink: 0 }}>
+            Register new patient
+          </Link>
+        </div>
         <TraceRule />
         <form onSubmit={submitSearch} className="card" style={{ display: 'flex', gap: 10 }}>
           <input
@@ -74,7 +81,10 @@ export default function Dashboard() {
 
         <h3 style={{ margin: '26px 0 12px' }}>Recent &amp; today's patients</h3>
         {recent.length === 0 ? (
-          <div className="card empty-state">No recent patients yet. Search above to get started.</div>
+          <div className="card empty-state">
+            No recent patients yet. Search above, or{' '}
+            <Link to="/register">register a new patient</Link> to get started.
+          </div>
         ) : (
           recent.map((p) => (
             <div key={p.id} className="list-row" onClick={() => navigate(`/patient/${p.id}`)}>
