@@ -189,7 +189,7 @@ const server = createServer(async (req, res) => {
           return finish(429, { error: 'Too many attempts. Try again in 15 minutes.' })
         }
 
-        const user = await auth.findUserByEmail(email)
+        const user = await auth.findUserByEmailAny(email)
         const validPassword = user ? await auth.verifyPasswordHash(password, user.password_hash) : false
         if (!user || !validPassword) {
           recordFailedLogin(email)
@@ -197,6 +197,17 @@ const server = createServer(async (req, res) => {
           // don't leak which accounts exist.
           return finish(401, { error: 'Incorrect email or password.' })
         }
+        if (!user.active) {
+          // Correct password, but the account has been suspended by an administrator.
+          // This intentionally does NOT count as a failed login attempt (the password
+          // was right) and does NOT send an OTP — a suspended account should never
+          // reach the MFA step.
+          return finish(403, { error: 'The account is suspended, contact IT for more information.' })
+        }
+        // Note: this blocks new sign-ins immediately. It does NOT revoke a session
+        // token issued before the suspension — sessions are self-contained JWTs (see
+        // authService.js), so an already-signed-in suspended user keeps working until
+        // that token's normal 12h expiry. Flagged in the write-up below.
         clearFailedLogins(email)
 
         const { challengeId, code } = await auth.createChallenge(user.id, 'login')
@@ -221,6 +232,8 @@ const server = createServer(async (req, res) => {
               name: user.name,
               email: user.email,
               role: user.role,
+              department: user.department,
+              organization: user.organization,
               mustChangePassword: user.force_password_change,
             },
           },
@@ -291,21 +304,24 @@ const server = createServer(async (req, res) => {
       }
 
       // ---- administrator-only: provision doctor/nurse/administrator accounts ----
-      if (authPath === 'admin/users') {
+      if (authPath === 'admin/users' || /^admin\/users\/[^/]+\/status$/.test(authPath)) {
         const current = auth.getUserFromRequest(req)
         if (!current) return finish(401, { error: 'Not signed in.' })
+        const stillActive = await auth.findUserById(current.id)
+        if (!stillActive) return finish(403, { error: 'This account is no longer active.' })
         if (current.role !== 'administrator') return finish(403, { error: 'Administrator access required.' })
 
-        if (req.method === 'GET') {
-          return finish(200, { users: await auth.listUsers() })
+        if (req.method === 'GET' && authPath === 'admin/users') {
+          return finish(200, { users: await auth.listUsers(current.organization) })
         }
 
-        if (req.method === 'POST') {
+        if (req.method === 'POST' && authPath === 'admin/users') {
           const body = await readBody(req)
           const email = (body?.email || '').trim().toLowerCase()
           const name = (body?.name || '').trim()
           const role = body?.role
           const department = (body?.department || '').trim() || null
+
           const tempPassword = body?.tempPassword || ''
 
           if (!email || !name) return finish(400, { error: 'Email and name are required.' })
@@ -318,16 +334,51 @@ const server = createServer(async (req, res) => {
           if (tempPassword.length < 12) {
             return finish(400, { error: 'Temporary password must be at least 12 characters.' })
           }
-          if (await auth.findUserByEmail(email)) {
+
+          // Doctors, nurses, and technicians always belong to the same
+          // hospital/clinic/healthcare center as the administrator creating them —
+          // never client-supplied. A new administrator account, though, may be
+          // standing up a *different* organization (e.g. onboarding another
+          // facility), so that one case requires an explicit name instead.
+          let organization
+          if (role === 'administrator') {
+            organization = (body?.organization || '').trim()
+            if (!organization) {
+              return finish(400, { error: 'Hospital/clinic/healthcare center name is required for administrator accounts.' })
+            }
+          } else {
+            organization = current.organization
+          }
+
+          if (await auth.findUserByEmailAny(email)) {
             return finish(409, { error: 'An account with that email already exists.' })
           }
 
           const passwordHash = await auth.hashPassword(tempPassword)
-          const created = await auth.createUser({ email, name, role, passwordHash, department })
+          const created = await auth.createUser({ email, name, role, passwordHash, department, organization })
           return finish(201, { user: created })
         }
-      }
 
+        // ---- suspend / reinstate a provisioned account ----
+        const statusMatch = authPath.match(/^admin\/users\/([^/]+)\/status$/)
+        if (statusMatch && req.method === 'POST') {
+          const targetId = statusMatch[1]
+          const body = await readBody(req)
+          const active = !!body?.active
+
+          if (targetId === current.id) {
+            return finish(400, { error: "You can't suspend your own account." })
+          }
+
+          const target = await auth.findUserByIdAny(targetId)
+          if (!target || target.organization !== current.organization) {
+            return finish(404, { error: 'No such account.' })
+          }
+
+          const updated = await auth.setUserActive(targetId, active)
+          return finish(200, { user: updated })
+        }
+      }
       return finish(404, { error: 'No route matched.' })
     }
 
@@ -342,12 +393,26 @@ const server = createServer(async (req, res) => {
     if (!current) {
       return finish(401, operationOutcome(401, 'Authentication required.'))
     }
+    // Sessions are self-contained JWTs (see authService.js) that are trusted as-is
+    // for most fields, but active status is checked fresh against the DB on every
+    // PHI-carrying request specifically so a suspension takes effect immediately
+    // instead of waiting out the token's normal expiry.
+    const stillActive = await auth.findUserById(current.id)
+    if (!stillActive) {
+      return finish(403, operationOutcome(403, 'This account is no longer active.'))
+    }
     if (current.forcePasswordChange) {
       // The frontend already redirects to /change-password, but that's a UX
       // convenience, not the actual enforcement — someone could otherwise call the
       // API directly with a valid session cookie from a temp-password account and
       // never be forced through the change. This is the real boundary.
       return finish(403, operationOutcome(403, 'Password must be changed before accessing patient data.'))
+    }
+    if (current.role === 'administrator') {
+      // Administrators manage staff accounts, not clinical/patient data. Enforced
+      // here (not just hidden in the UI) so a direct API call can't reach patient
+      // records with an administrator session either.
+      return finish(403, operationOutcome(403, 'Administrator accounts do not have access to patient records.'))
     }
     currentUser = current
 

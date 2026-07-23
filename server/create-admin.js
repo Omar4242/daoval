@@ -11,21 +11,23 @@
 //   docker compose exec -T \
 //     -e ADMIN_EMAIL="you@example.com" \
 //     -e ADMIN_NAME="Your Name" \
+//     -e ADMIN_ORGANIZATION="Riverside General Hospital" \
 //     -e ADMIN_PASSWORD="$ADMIN_PASSWORD" \
 //     backend node server/create-admin.js
 //
 // (-T, not -it — no terminal needed since nothing here reads interactive input.)
 
 import { pool, migrate } from './db.js'
-import { hashPassword, findUserByEmail, createUser } from './authService.js'
+import { hashPassword, findUserByEmailAny, createUser } from './authService.js'
 
 async function main() {
   const email = (process.env.ADMIN_EMAIL || '').trim().toLowerCase()
   const name = (process.env.ADMIN_NAME || '').trim()
+  const organization = (process.env.ADMIN_ORGANIZATION || '').trim()
   const password = process.env.ADMIN_PASSWORD || ''
 
-  if (!email || !name || !password) {
-    console.error('Missing ADMIN_EMAIL, ADMIN_NAME, or ADMIN_PASSWORD. See the usage comment at the top of this file.')
+  if (!email || !name || !organization || !password) {
+    console.error('Missing ADMIN_EMAIL, ADMIN_NAME, ADMIN_ORGANIZATION, or ADMIN_PASSWORD. See the usage comment at the top of this file.')
     process.exit(1)
   }
   if (!email.includes('@')) {
@@ -39,13 +41,13 @@ async function main() {
 
   await migrate()
 
-  if (await findUserByEmail(email)) {
+  if (await findUserByEmailAny(email)) {
     console.error(`An account with ${email} already exists.`)
     process.exit(1)
   }
 
   const passwordHash = await hashPassword(password)
-  const user = await createUser({ email, name, role: 'administrator', passwordHash, forcePasswordChange: false })
+  const user = await createUser({ email, name, organization, role: 'administrator', passwordHash, forcePasswordChange: false })
 
   console.log(`Administrator account created: ${user.email} (${user.id})`)
   console.log('Sign in at the app with this email and password — MFA will email (or log, in dev mode) a code to the same address.')

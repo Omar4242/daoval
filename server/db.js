@@ -76,6 +76,7 @@ export async function migrate() {
       password_hash          text NOT NULL,
       role                   text NOT NULL CHECK (role IN ('administrator', 'doctor', 'nurse', 'technician')),
       department             text,
+      organization           text,
       active                 boolean NOT NULL DEFAULT true,
       force_password_change  boolean NOT NULL DEFAULT false,
       created_at             timestamptz NOT NULL DEFAULT now()
@@ -101,6 +102,11 @@ export async function migrate() {
     ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
     ALTER TABLE users ADD CONSTRAINT users_role_check
       CHECK (role IN ('administrator', 'doctor', 'nurse', 'technician'));
+
+    -- Every account belongs to a hospital/clinic/healthcare center. Administrators
+    -- state theirs at account creation; doctors/nurses/technicians inherit it from
+    -- the administrator who provisions them (see server/index.js POST /auth/admin/users).
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS organization text;
 
     -- force_password_change was originally created as a text column and never
     -- actually used. Convert it to a real boolean, defaulting existing (unset) rows

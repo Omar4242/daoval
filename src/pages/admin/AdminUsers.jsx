@@ -32,10 +32,11 @@ export default function AdminUsers() {
   const { user, signOut } = useAuth()
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
-  const [form, setForm] = useState({ email: '', name: '', role: 'doctor', department: DEPARTMENTS[0] })
+  const [form, setForm] = useState({ email: '', name: '', role: 'doctor', department: DEPARTMENTS[0], organization: '' })
   const [tempPassword, setTempPassword] = useState('')
   const [error, setError] = useState('')
   const [lastCreated, setLastCreated] = useState(null)
+  const [statusBusyId, setStatusBusyId] = useState(null)
 
   async function refresh() {
     setLoading(true)
@@ -57,16 +58,30 @@ export default function AdminUsers() {
   async function submit(e) {
     e.preventDefault()
     setError('')
-    const payload = { ...form, department: form.role === 'administrator' ? null : form.department }
+    const payload = {
+      ...form,
+      department: form.role === 'administrator' ? null : form.department,
+      organization: form.role === 'administrator' ? form.organization.trim() : undefined,
+    }
     const res = await authApi.createAdminUser({ ...payload, tempPassword })
     if (!res.ok) return setError(res.error)
     setLastCreated({ email: form.email, tempPassword })
-    setForm({ email: '', name: '', role: 'doctor', department: DEPARTMENTS[0] })
+    setForm({ email: '', name: '', role: 'doctor', department: DEPARTMENTS[0], organization: '' })
     setTempPassword('')
     refresh()
   }
 
+  async function toggleStatus(u) {
+    setStatusBusyId(u.id)
+    setError('')
+    const res = await authApi.setUserStatus(u.id, !u.active)
+    setStatusBusyId(null)
+    if (!res.ok) return setError(res.error)
+    refresh()
+  }
+
   const needsDepartment = form.role !== 'administrator'
+  const needsOrganization = form.role === 'administrator'
 
   return (
     <div className="app-shell">
@@ -132,7 +147,25 @@ export default function AdminUsers() {
                   </select>
                 </div>
               )}
+              {needsOrganization && (
+                <div className="field" style={{ flex: 1 }}>
+                  <label>Hospital / clinic / healthcare center <span className="req">*</span></label>
+                  <input
+                    type="text"
+                    value={form.organization}
+                    onChange={(e) => setForm({ ...form, organization: e.target.value })}
+                    onFocus={openForm}
+                    placeholder="e.g. Riverside General Hospital"
+                    required
+                  />
+                </div>
+              )}
             </div>
+            {!needsOrganization && (
+              <p className="hint" style={{ marginBottom: 12 }}>
+                They'll be added to {user?.organization || 'your'} organization, same as your account.
+              </p>
+            )}
             {tempPassword && (
               <p className="hint" style={{ marginBottom: 12 }}>
                 Temporary password (shown once — share it with them directly, not by email):{' '}
@@ -164,9 +197,21 @@ export default function AdminUsers() {
                 <div className="mono hint">
                   {u.email} · {u.role}
                   {u.department ? ` · ${u.department}` : ''}
+                  {u.organization ? ` · ${u.organization}` : ''}
                 </div>
               </div>
-              <span className="hint">{u.active ? 'Active' : 'Deactivated'}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span className="hint">{u.active ? 'Active' : 'Suspended'}</span>
+                {u.id !== user?.id && (
+                  <button
+                    className="btn btn-ghost"
+                    disabled={statusBusyId === u.id}
+                    onClick={() => toggleStatus(u)}
+                  >
+                    {u.active ? 'Suspend' : 'Reinstate'}
+                  </button>
+                )}
+              </div>
             </div>
           ))
         )}

@@ -54,9 +54,16 @@ export function listAdminUsers() {
   return request('admin/users', { method: 'GET' })
 }
 
-export function createAdminUser({ email, name, role, department, tempPassword }) {
+export function createAdminUser({ email, name, role, department, organization, tempPassword }) {
   return request('admin/users', {
     method: 'POST',
-    body: JSON.stringify({ email, name, role, department, tempPassword }),
+    body: JSON.stringify({ email, name, role, department, organization, tempPassword }),
+  })
+}
+
+export function setUserStatus(userId, active) {
+  return request(`admin/users/${userId}/status`, {
+    method: 'POST',
+    body: JSON.stringify({ active }),
   })
 }

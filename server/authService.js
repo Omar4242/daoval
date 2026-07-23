@@ -53,6 +53,7 @@ export function signSession(user) {
       name: user.name,
       email: user.email,
       department: user.department || null,
+      organization: user.organization || null,
       forcePasswordChange: !!user.force_password_change,
     },
     JWT_SECRET,
@@ -105,6 +106,7 @@ export function getUserFromRequest(req) {
     name: payload.name,
     email: payload.email,
     department: payload.department,
+    organization: payload.organization,
     forcePasswordChange: !!payload.forcePasswordChange,
   }
 }
@@ -184,19 +186,55 @@ export async function findUserByEmail(email) {
   return res.rows[0] || null
 }
 
+// Unlike findUserByEmail, this does NOT filter on active — used only at the login
+// step, so a correct password against a suspended account can be told apart from a
+// wrong password (see POST /auth/login), rather than both looking like "no such
+// account" the way findUserByEmail's active=true filter would make them look.
+export async function findUserByEmailAny(email) {
+  const res = await pool.query(`SELECT * FROM users WHERE email = $1`, [email])
+  return res.rows[0] || null
+}
+
 export async function findUserById(id) {
   const res = await pool.query(`SELECT * FROM users WHERE id = $1 AND active = true`, [id])
   return res.rows[0] || null
 }
 
-export async function createUser({ email, name, role, passwordHash, department = null, forcePasswordChange = true }) {
+export async function findUserByIdAny(id) {
+  const res = await pool.query(`SELECT * FROM users WHERE id = $1`, [id])
+  return res.rows[0] || null
+}
+
+export async function createUser({
+  email,
+  name,
+  role,
+  passwordHash,
+  department = null,
+  organization = null,
+  forcePasswordChange = true,
+}) {
   const res = await pool.query(
-    `INSERT INTO users (email, name, role, password_hash, department, force_password_change)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING id, email, name, role, department, active, force_password_change, created_at`,
-    [email, name, role, passwordHash, department, forcePasswordChange]
+    `INSERT INTO users (email, name, role, password_hash, department, organization, force_password_change)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING id, email, name, role, department, organization, active, force_password_change, created_at`,
+    [email, name, role, passwordHash, department, organization, forcePasswordChange]
   )
   return res.rows[0]
+}
+
+// Suspend or reinstate an account. Suspended accounts fail login with a distinct
+// message (see POST /auth/login) rather than the generic bad-credentials error, and
+// any existing session they're already holding stops working on their next request
+// because getUserFromRequest's callers re-check the DB via findUserById /
+// requireActiveUser, which both filter on active = true.
+export async function setUserActive(userId, active) {
+  const res = await pool.query(
+    `UPDATE users SET active = $1 WHERE id = $2
+     RETURNING id, email, name, role, department, organization, active, force_password_change, created_at`,
+    [active, userId]
+  )
+  return res.rows[0] || null
 }
 
 export async function updatePassword(userId, newPasswordHash) {
@@ -206,9 +244,12 @@ export async function updatePassword(userId, newPasswordHash) {
   )
 }
 
-export async function listUsers() {
+export async function listUsers(organization) {
   const res = await pool.query(
-    `SELECT id, email, name, role, department, active, created_at FROM users ORDER BY created_at DESC`
+    `SELECT id, email, name, role, department, organization, active, created_at FROM users
+     WHERE organization = $1
+     ORDER BY created_at DESC`,
+    [organization]
   )
   return res.rows
 }
