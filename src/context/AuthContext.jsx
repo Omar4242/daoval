@@ -53,7 +53,7 @@ export function AuthProvider({ children }) {
     if (!res.ok) return { ok: false, error: res.error }
     setUser(res.user)
     setLocked(false)
-    return { ok: true }
+    return { ok: true, user: res.user }
   }
 
   // ---- idle-timeout re-auth: request a fresh emailed code, then verify it ----
