@@ -4,6 +4,7 @@ import { PatientProvider } from './context/PatientContext'
 import ProtectedRoute from './components/ProtectedRoute'
 
 import SignIn from './pages/SignIn'
+import ForgotPassword from './pages/ForgotPassword'
 import Landing from './pages/Landing'
 import Dashboard from './pages/Dashboard'
 import SearchResults from './pages/SearchResults'
@@ -46,6 +47,7 @@ export default function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/sign-in" element={<SignIn />} />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
             <Route path="/search" element={<ProtectedRoute><SearchResults /></ProtectedRoute>} />
             <Route path="/register" element={<ProtectedRoute><RegisterPatient /></ProtectedRoute>} />

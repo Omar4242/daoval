@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import TraceRule from '../components/TraceRule'
 
@@ -100,10 +100,13 @@ export default function SignIn() {
                 <label>Email <span className="req">*</span></label>
                 <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus required />
               </div>
-              <div className="field" style={{ marginBottom: 16 }}>
+              <div className="field" style={{ marginBottom: 8 }}>
                 <label>Password <span className="req">*</span></label>
                 <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
               </div>
+              <p style={{ marginBottom: 16, textAlign: 'right' }}>
+                <Link to="/forgot-password" style={{ fontSize: 13 }}>Forgot password?</Link>
+              </p>
               {error && <p className="err-text" style={{ marginBottom: 12 }}>{error}</p>}
               <button className="btn btn-primary btn-block" type="submit" disabled={submitting}>
                 {submitting ? 'Checking…' : 'Continue'}

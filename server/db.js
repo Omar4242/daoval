@@ -88,7 +88,7 @@ export async function migrate() {
       id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id      uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       code_hash    text NOT NULL,
-      purpose      text NOT NULL CHECK (purpose IN ('login', 'reauth')),
+      purpose      text NOT NULL CHECK (purpose IN ('login', 'reauth', 'reset')),
       attempts     integer NOT NULL DEFAULT 0,
       consumed     boolean NOT NULL DEFAULT false,
       expires_at   timestamptz NOT NULL,
@@ -124,6 +124,12 @@ export async function migrate() {
         ALTER TABLE users ALTER COLUMN force_password_change SET DEFAULT false;
       END IF;
     END $$;
+
+    -- Widen an already-deployed login_challenges table to allow the 'reset' purpose
+    -- (forgot-password flow). Safe to run repeatedly.
+    ALTER TABLE login_challenges DROP CONSTRAINT IF EXISTS login_challenges_purpose_check;
+    ALTER TABLE login_challenges ADD CONSTRAINT login_challenges_purpose_check
+      CHECK (purpose IN ('login', 'reauth', 'reset'));
   `)
 }
 

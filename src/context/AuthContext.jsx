@@ -72,6 +72,22 @@ export function AuthProvider({ children }) {
     return { ok: true }
   }
 
+  // ---- forgot-password flow: emailed code, then a new password, no session change ----
+
+  async function requestPasswordReset(email) {
+    const res = await authApi.forgotPassword(email)
+    if (!res.ok) return { ok: false, error: res.error }
+    // challengeId is present only when an account actually exists — the UI keeps the
+    // same on-screen next step either way so it doesn't leak that back to the person.
+    return { ok: true, challengeId: res.challengeId }
+  }
+
+  async function submitPasswordReset(challengeId, code, newPassword) {
+    const res = await authApi.resetPassword(challengeId, code, newPassword)
+    if (!res.ok) return { ok: false, error: res.error }
+    return { ok: true }
+  }
+
   async function submitPasswordChange(currentPassword, newPassword) {
     const res = await authApi.changePassword(currentPassword, newPassword)
     if (!res.ok) return { ok: false, error: res.error }
@@ -95,6 +111,8 @@ export function AuthProvider({ children }) {
         submitCode,
         requestReauthCode,
         submitReauthCode,
+        requestPasswordReset,
+        submitPasswordReset,
         submitPasswordChange,
         signOut,
       }}

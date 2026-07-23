@@ -179,6 +179,26 @@ export async function sendOtpEmail(toEmail, code) {
   })
 }
 
+// Separate subject/copy from sendOtpEmail on purpose — this one is emailed to
+// someone who (claims to) have lost their password, so it should never look
+// identical to a routine sign-in code in an inbox, and it says plainly that no
+// action is needed if the person didn't ask for this.
+export async function sendPasswordResetEmail(toEmail, code) {
+  if (!SENDER_EMAIL || !process.env.SMTP_HOST) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('SMTP_HOST/SMTP_FROM are not set — cannot send password reset codes.')
+    }
+    console.log(`[dev] Password reset code for ${toEmail}: ${code}`)
+    return
+  }
+  await getTransporter().sendMail({
+    from: SENDER_EMAIL,
+    to: toEmail,
+    subject: 'Reset your Daoval password',
+    text: `Use this code to reset your Daoval password: ${code}. It expires in 10 minutes. If you didn't request a password reset, you can safely ignore this email — your password has not been changed.`,
+  })
+}
+
 // ---------- users ----------
 
 export async function findUserByEmail(email) {

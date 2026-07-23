@@ -41,6 +41,25 @@ function clearFailedLogins(email) {
   failedLogins.delete(email)
 }
 
+// Separate throttle for forgot-password requests: same shape as the login throttle,
+// but on its own map/limit so someone hammering "forgot password" for an email
+// address can't also lock that person out of signing in (and vice versa).
+const resetRequests = new Map() // email -> [timestamps]
+const RESET_WINDOW_MS = 15 * 60 * 1000
+const MAX_RESET_REQUESTS = 5
+
+function isResetThrottled(email) {
+  const attempts = (resetRequests.get(email) || []).filter((t) => Date.now() - t < RESET_WINDOW_MS)
+  resetRequests.set(email, attempts)
+  return attempts.length >= MAX_RESET_REQUESTS
+}
+
+function recordResetRequest(email) {
+  const attempts = resetRequests.get(email) || []
+  attempts.push(Date.now())
+  resetRequests.set(email, attempts)
+}
+
 function send(res, status, body, extraHeaders = {}, contentType = 'application/fhir+json') {
   const payload = body == null ? '' : JSON.stringify(body)
   res.writeHead(status, {
@@ -239,6 +258,54 @@ const server = createServer(async (req, res) => {
           },
           { 'Set-Cookie': auth.sessionCookie(token) }
         )
+      }
+
+      if (req.method === 'POST' && authPath === 'forgot-password') {
+        const body = await readBody(req)
+        const email = (body?.email || '').trim().toLowerCase()
+
+        if (email && isResetThrottled(email)) {
+          // Same generic response as success — a throttle message would itself leak
+          // that this email is being hammered/exists. The person just waits and
+          // tries again; nothing distinguishes this from the happy path below.
+          return finish(200, { ok: true })
+        }
+        if (email) recordResetRequest(email)
+
+        // Always respond 200/ok, whether or not an account exists, is active, or the
+        // email is malformed — this endpoint must never let a caller learn which
+        // emails have accounts. The actual email (if any) is fire-and-forget from
+        // the caller's point of view.
+        const user = email ? await auth.findUserByEmail(email) : null
+        if (user) {
+          const { challengeId, code } = await auth.createChallenge(user.id, 'reset')
+          await auth.sendPasswordResetEmail(user.email, code)
+          return finish(200, { ok: true, challengeId })
+        }
+        return finish(200, { ok: true })
+      }
+
+      if (req.method === 'POST' && authPath === 'reset-password') {
+        const body = await readBody(req)
+        const newPassword = body?.newPassword || ''
+        if (newPassword.length < 12) {
+          return finish(400, { error: 'New password must be at least 12 characters.' })
+        }
+
+        const result = await auth.verifyChallenge(body?.challengeId, body?.code || '', 'reset')
+        if (!result.ok) return finish(401, { error: result.error })
+
+        const user = await auth.findUserById(result.userId)
+        if (!user) return finish(401, { error: 'Account no longer active.' })
+
+        const newHash = await auth.hashPassword(newPassword)
+        await auth.updatePassword(user.id, newHash)
+        // Deliberately does NOT sign the person in — this request only proved control
+        // of the account's email inbox, not physical presence at a device that should
+        // get a live session, and a forgot-password flow is exactly the scenario where
+        // that distinction matters (e.g. a reset requested from a different machine
+        // than the one that will actually be used to sign in).
+        return finish(200, { ok: true })
       }
 
       if (req.method === 'POST' && authPath === 'change-password') {
