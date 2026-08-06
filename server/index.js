@@ -16,6 +16,18 @@ const BASE_PATH = '/fhir'
 // requests. Defaults to the Vite dev server's origin for local `npm run dev`.
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'http://localhost:5173'
 
+// The facility directory: who and where, never what happened to a patient. These are
+// the only resource types an administrator may touch under /fhir/*, and the only ones
+// a clinician may not write. Deliberately an exact allowlist rather than a "not
+// clinical" heuristic, so adding a new resource type never silently widens either
+// role's access.
+//
+// TRIPWIRE: PractitionerRole is not here yet, so administrators are currently refused
+// it and clinicians can write it. Add it to this set when PractitionerRole lands, or
+// admins will not be able to manage the resource that links practitioners to
+// departments.
+const DIRECTORY_RESOURCE_TYPES = new Set(['Organization', 'Location', 'Practitioner'])
+
 await store.load()
 await store.seedIfEmpty()
 
@@ -475,30 +487,57 @@ const server = createServer(async (req, res) => {
       // never be forced through the change. This is the real boundary.
       return finish(403, operationOutcome(403, 'Password must be changed before accessing patient data.'))
     }
+    const rest = url.pathname.slice(BASE_PATH.length).replace(/^\/+/, '')
+    const segments = rest.split('/').filter(Boolean)
+    const [resourceType, id] = segments
+
+    // The role checks below need to know which resource type is being addressed, so
+    // the path is parsed first. Nothing has been read from the database at this point.
+    const isMetadata = req.method === 'GET' && segments[0] === 'metadata'
+    const isDirectory = DIRECTORY_RESOURCE_TYPES.has(resourceType)
+    const isWrite = req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE'
+
     if (current.role === 'administrator') {
-      // Administrators manage staff accounts, not clinical/patient data. Enforced
-      // here (not just hidden in the UI) so a direct API call can't reach patient
-      // records with an administrator session either.
-      return finish(403, operationOutcome(403, 'Administrator accounts do not have access to patient records.'))
+      // Administrators manage staff accounts and the facility directory, never
+      // clinical/patient data. Enforced here (not just hidden in the UI) so a direct
+      // API call can't reach patient records with an administrator session either.
+      //
+      // The allowlist is exact: anything that is not one of the three directory types
+      // is refused, including a transaction Bundle at the base path. Bundles are
+      // refused because segments is empty for them, so resourceType is undefined and
+      // isDirectory is false. That matters: a Bundle can carry entries of any type, so
+      // letting one through here would be a way around this check.
+      if (!isMetadata && !isDirectory) {
+        return finish(403, operationOutcome(403, 'Administrator accounts do not have access to patient records.'))
+      }
+    } else if (isDirectory && isWrite) {
+      // Clinicians read the directory, because encounters need to reference the
+      // organization and location they happened in, but they never edit it.
+      return finish(403, operationOutcome(403, 'Directory resources are managed by administrators.'))
     }
     currentUser = current
 
-    const rest = url.pathname.slice(BASE_PATH.length).replace(/^\/+/, '')
-    const segments = rest.split('/').filter(Boolean)
-
-    if (req.method === 'GET' && segments[0] === 'metadata') {
+    if (isMetadata) {
       return finish(200, capabilityStatement())
     }
 
     if (req.method === 'POST' && segments.length === 0) {
       const body = await readBody(req)
       if (body?.resourceType === 'Bundle') {
+        // Only clinicians reach this branch (administrators are refused above), and a
+        // Bundle can carry any resource type, so the directory allowlist has to be
+        // applied to its entries too. Without this, the clinician write ban above
+        // could be sidestepped by wrapping a Location in an encounter Bundle.
+        const bundleTypes = (body.entry || []).map(
+          (e) => e.resource?.resourceType || (e.request?.url || '').split('/')[0]
+        )
+        if (bundleTypes.some((t) => DIRECTORY_RESOURCE_TYPES.has(t))) {
+          return finish(403, operationOutcome(403, 'Directory resources are managed by administrators.'))
+        }
         return finish(200, await processTransactionBundle(body))
       }
       return finish(400, operationOutcome(400, 'Expected a transaction Bundle at the base URL.'))
     }
-
-    const [resourceType, id] = segments
 
     if (req.method === 'POST' && resourceType && !id) {
       const body = await readBody(req)
