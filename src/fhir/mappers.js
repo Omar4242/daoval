@@ -184,6 +184,99 @@ export function buildProvenanceResource(encounterId, practitioner, existingId) {
   }
 }
 
+// ---------------- directory resources ----------------
+//
+// Organization / Location / Practitioner are not decorative lookup rows: ingested data
+// gets attributed to them, so their identity has to survive re-ingestion from an
+// external system. That stability lives in `identifier`, the cross-system business key,
+// and not in `id`, which is a local surrogate assigned on write like every other
+// builder in this file.
+//
+// Search caveat, recorded here so it isn't rediscovered as a mystery bug: store.js's
+// `name` search parameter assumes a HumanName[] (it reads r.name[0].text, then
+// .given/.family). Organization.name and Location.name are plain strings in FHIR R4, so
+// r.name[0] is the string's first *character* and every field read off it is undefined.
+// `?name=` therefore matches nothing for those two and returns an empty set rather than
+// an error. Practitioner.name is a HumanName[] and does work. Until store.js handles
+// both shapes explicitly, and fails loudly on a shape it doesn't recognise instead of
+// silently filtering to zero, look these up with `?identifier=`, which works for all
+// three.
+
+export function buildOrganizationResource(org, existingId) {
+  return {
+    resourceType: 'Organization',
+    id: existingId,
+    identifier: [{ system: 'urn:daoval:organization', value: org.key }],
+    active: org.active !== false,
+    name: org.name,
+    // Caller-supplied only: alternate spellings and transliterations of the same
+    // facility name, which is what makes an inbound record match an existing org.
+    alias: org.alias?.length ? org.alias : undefined,
+    type: [
+      {
+        coding: [
+          {
+            system: 'http://terminology.hl7.org/CodeSystem/organization-type',
+            code: 'prov',
+            display: 'Healthcare Provider',
+          },
+        ],
+      },
+    ],
+    telecom: org.phone ? [{ system: 'phone', value: org.phone }] : [],
+    address: org.address ? [{ text: org.address }] : [],
+    partOf: org.partOfId ? { reference: `Organization/${org.partOfId}` } : undefined,
+  }
+}
+
+export function buildLocationResource(location, existingId) {
+  return {
+    resourceType: 'Location',
+    id: existingId,
+    identifier: [{ system: 'urn:daoval:location', value: location.key }],
+    status: location.status || 'active',
+    name: location.name,
+    // 'instance' = this specific department in this specific hospital, as opposed to
+    // 'kind', which would describe a class of place.
+    mode: 'instance',
+    type: location.roleCode
+      ? [{ coding: [{ system: 'http://terminology.hl7.org/CodeSystem/v3-RoleCode', code: location.roleCode, display: location.name }] }]
+      : [{ text: location.name }],
+    physicalType: [
+      {
+        coding: [
+          {
+            system: 'http://terminology.hl7.org/CodeSystem/location-physical-type',
+            code: location.physicalType || 'wa',
+          },
+        ],
+      },
+    ],
+    managingOrganization: { reference: `Organization/${location.organizationId}` },
+    partOf: location.partOfId ? { reference: `Location/${location.partOfId}` } : undefined,
+  }
+}
+
+// Takes no existingId, unlike the rest of this file: a practitioner's resource id is
+// deliberately the same UUID as their users row. auditService.js and
+// buildProvenanceResource already emit `Practitioner/${user.id}` into every AuditEvent
+// and Provenance, so reusing the id makes those references resolve, including for
+// records written before any Practitioner resource existed.
+export function buildPractitionerResource(user) {
+  return {
+    resourceType: 'Practitioner',
+    id: user.id,
+    identifier: [{ system: 'urn:daoval:user-id', value: user.id }],
+    active: user.active !== false,
+    // users.name is a single free-text field, so there's no reliable family/given split
+    // to make here. Guessing one from whitespace would mangle names that don't follow a
+    // given-then-family order. text alone is honest, and store.js's name search reads
+    // name[0].text first anyway.
+    name: [{ text: user.name }],
+    telecom: user.email ? [{ system: 'email', value: user.email }] : [],
+  }
+}
+
 export function buildAmendmentDocumentReference(patientId, originalEncounterId, { text, reasonCode }, existingId) {
   return {
     resourceType: 'DocumentReference',
