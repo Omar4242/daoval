@@ -264,6 +264,31 @@ export async function updatePassword(userId, newPasswordHash) {
   )
 }
 
+// ---------- organization claims ----------
+//
+// Reads and writes organization_admins only. Neither of these touches a users row: the
+// free-text users.organization string is left exactly as it is, and no users column is
+// written. See the table comment in db.js for why the two are kept separate.
+
+export async function getClaimedOrganizationId(userId) {
+  const res = await pool.query(`SELECT organization_id FROM organization_admins WHERE user_id = $1`, [userId])
+  return res.rows[0]?.organization_id || null
+}
+
+// Idempotent on purpose. A double submit, a refresh, or a second attempt returns the
+// claim that is already recorded rather than repointing it. Re-pointing an existing
+// claim at a different facility is a correction, not a routine action, and it should
+// be a deliberate separate step rather than something a stray click can do.
+export async function claimOrganization(userId, organizationId) {
+  await pool.query(
+    `INSERT INTO organization_admins (user_id, organization_id)
+     VALUES ($1, $2)
+     ON CONFLICT (user_id) DO NOTHING`,
+    [userId, organizationId]
+  )
+  return getClaimedOrganizationId(userId)
+}
+
 export async function listUsers(organization) {
   const res = await pool.query(
     `SELECT id, email, name, role, department, organization, active, created_at FROM users

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import * as authApi from '../../services/authApi'
 import TraceRule from '../../components/TraceRule'
@@ -88,6 +89,9 @@ export default function AdminUsers() {
       <div className="topbar">
         <Brand label="ADMINISTRATOR" />
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <Link className="btn btn-ghost" to="/admin/locations">
+            Departments and wards
+          </Link>
           <span style={{ fontSize: 13.5, color: 'var(--ink-soft)' }}>{user?.name}</span>
           <button className="btn btn-ghost" onClick={signOut}>
             Sign out

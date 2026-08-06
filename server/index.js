@@ -383,7 +383,11 @@ const server = createServer(async (req, res) => {
       }
 
       // ---- administrator-only: provision doctor/nurse/administrator accounts ----
-      if (authPath === 'admin/users' || /^admin\/users\/[^/]+\/status$/.test(authPath)) {
+      if (
+        authPath === 'admin/users' ||
+        authPath === 'admin/organization' ||
+        /^admin\/users\/[^/]+\/status$/.test(authPath)
+      ) {
         const current = auth.getUserFromRequest(req)
         if (!current) return finish(401, { error: 'Not signed in.' })
         const stillActive = await auth.findUserById(current.id)
@@ -392,6 +396,32 @@ const server = createServer(async (req, res) => {
 
         if (req.method === 'GET' && authPath === 'admin/users') {
           return finish(200, { users: await auth.listUsers(current.organization) })
+        }
+
+        // ---- which Organization resource this administrator has claimed ----
+        //
+        // The claim is how an account is tied to a facility. There is deliberately no
+        // automatic match from the free-text users.organization string: two different
+        // facilities can share a name, and silently merging them would be far worse
+        // than asking once. The administrator confirms explicitly, and that
+        // confirmation is the join.
+        if (req.method === 'GET' && authPath === 'admin/organization') {
+          return finish(200, { organizationId: await auth.getClaimedOrganizationId(current.id) })
+        }
+
+        if (req.method === 'POST' && authPath === 'admin/organization') {
+          const body = await readBody(req)
+          const organizationId = (body?.organizationId || '').trim()
+          if (!organizationId) return finish(400, { error: 'An organization id is required.' })
+
+          // The Organization resource itself is created through POST /fhir/Organization
+          // before this is called, so this only ever records a reference to one that
+          // already exists. Nothing here creates or edits a resource.
+          const existing = await store.readResource('Organization', organizationId)
+          if (!existing) return finish(404, { error: 'No such organization.' })
+
+          const claimed = await auth.claimOrganization(current.id, organizationId)
+          return finish(200, { organizationId: claimed })
         }
 
         if (req.method === 'POST' && authPath === 'admin/users') {

@@ -99,6 +99,30 @@ export async function migrate() {
     );
     CREATE INDEX IF NOT EXISTS login_challenges_user_idx ON login_challenges (user_id);
 
+    -- Which Organization resource an administrator has claimed as their facility.
+    --
+    -- Deliberately its own table rather than a users.organization_id column. Populating
+    -- a column would mean writing rows that already exist, which is out of scope until
+    -- backups are verified. This table only ever gets new rows inserted into it and
+    -- never reads or writes a users row.
+    --
+    -- It runs strictly parallel to the free-text users.organization string. Nothing
+    -- here writes back to that string or tries to keep the two in sync: reconciling
+    -- them is a later job, and doing it implicitly would be exactly the silent
+    -- facility-merge this design exists to avoid.
+    --
+    -- This is acknowledged debt, and the fold-in path is known: once backups are
+    -- verified and existing rows can be written, this becomes users.organization_id.
+    --
+    -- One claim per administrator (user_id is the primary key). Two administrators at
+    -- the same facility get one row each pointing at the same organization_id, which
+    -- is the correct shape: the claim belongs to the person, not the facility.
+    CREATE TABLE IF NOT EXISTS organization_admins (
+      user_id          uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      organization_id  text NOT NULL,
+      created_at       timestamptz NOT NULL DEFAULT now()
+    );
+
     -- Migrating an already-deployed users table: add the department column and widen
     -- the role constraint to include 'technician'. Safe to run repeatedly.
     ALTER TABLE users ADD COLUMN IF NOT EXISTS department text;

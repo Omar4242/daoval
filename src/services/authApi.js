@@ -69,6 +69,17 @@ export function createAdminUser({ email, name, role, department, organization, t
   })
 }
 
+export function getClaimedOrganization() {
+  return request('admin/organization', { method: 'GET' })
+}
+
+export function claimOrganization(organizationId) {
+  return request('admin/organization', {
+    method: 'POST',
+    body: JSON.stringify({ organizationId }),
+  })
+}
+
 export function setUserStatus(userId, active) {
   return request(`admin/users/${userId}/status`, {
     method: 'POST',
