@@ -53,6 +53,9 @@ export async function migrate() {
     CREATE INDEX IF NOT EXISTS fhir_resources_patient_ref_idx
       ON fhir_resources USING gin ((data -> 'patient'));
 
+    -- No index for the ?organization= search param: filtering happens in Node, not SQL,
+    -- so add a GIN index on managingOrganization/serviceProvider when/if that moves.
+
     -- Append-only audit trail. auditService.js already writes AuditEvent resources
     -- into fhir_resources; this table additionally captures raw HTTP-level access,
     -- which is what HIPAA's audit-control requirement actually asks for (who touched

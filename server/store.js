@@ -68,24 +68,78 @@ export async function listResources(resourceType) {
   return res.rows.map((r) => r.data)
 }
 
+// FHIR R4 spells `name` two different ways depending on the resource. Patient and
+// Practitioner use HumanName[]; Organization and Location use a plain string.
+//
+// This used to read r.name[0].text unconditionally. Against a string that yields the
+// string's *first character*, whose .text/.given/.family are all undefined, so the
+// filter evaluated false for every row: ?name= matched nothing at all for Organization
+// and Location and returned an empty searchset rather than an error. An empty result
+// that looks like "no matches" is the worst possible failure here, because it reads as
+// a data problem rather than a code one.
+//
+// Both shapes are handled explicitly now, and anything else throws rather than quietly
+// filtering to zero. The throw surfaces as a 500 naming the offending resource, which
+// is the intended loud failure.
+//
+// Scope note: for the array shape this still reads only the first entry, exactly as
+// before. Matching across every historical name a person has (maiden, previous) would
+// be a real change to clinical search behaviour, and that is a separate decision rather
+// than a rider on a shape fix.
+function nameText(resource) {
+  const name = resource?.name
+  if (name == null) return ''
+  // Checked before any indexing: indexing into a string is precisely the bug above.
+  if (typeof name === 'string') return name
+  if (Array.isArray(name)) {
+    const first = name[0]
+    if (first == null) return ''
+    if (typeof first === 'string') return first
+    if (typeof first === 'object') {
+      return first.text || [first.given?.join(' '), first.family].filter(Boolean).join(' ')
+    }
+  }
+  throw new Error(
+    `searchResources: unsupported name shape on ${resource?.resourceType}/${resource?.id}: ` +
+      `expected a string or HumanName[], got ` +
+      `${Array.isArray(name) ? `array of ${typeof name[0]}` : typeof name}`
+  )
+}
+
 // Same small FHIR-ish search surface as the demo backend supported — enough for this
-// app's frontend (name/identifier/patient-reference lookups + date sort), not a
-// general FHIR search implementation.
+// app's frontend (name/identifier/organization/patient-reference lookups + date sort),
+// not a general FHIR search implementation.
 export async function searchResources(resourceType, params) {
   let results = await listResources(resourceType)
 
   if (params.name) {
     const term = params.name.toLowerCase()
-    results = results.filter((r) => {
-      const name = r.name?.[0]
-      const text = name?.text || [name?.given?.join(' '), name?.family].filter(Boolean).join(' ')
-      return (text || '').toLowerCase().includes(term)
-    })
+    results = results.filter((r) => nameText(r).toLowerCase().includes(term))
   }
 
   if (params.identifier) {
     const term = params.identifier.toLowerCase()
     results = results.filter((r) => (r.identifier || []).some((i) => (i.value || '').toLowerCase().includes(term)))
+  }
+
+  // Which organization a resource belongs to is spelled differently per resource type:
+  // Location uses managingOrganization, Encounter uses serviceProvider, and the generic
+  // spelling is a plain organization reference. All three are matched so callers don't
+  // have to know which one applies to the type they're querying.
+  //
+  // Accepts either a bare id or a full 'Organization/<id>' reference, since both forms
+  // turn up in practice. (params.patient below is bare-id only, kept as-is rather than
+  // changed under this commit.)
+  if (params.organization) {
+    const ref = params.organization.startsWith('Organization/')
+      ? params.organization
+      : `Organization/${params.organization}`
+    results = results.filter(
+      (r) =>
+        r.managingOrganization?.reference === ref ||
+        r.serviceProvider?.reference === ref ||
+        r.organization?.reference === ref
+    )
   }
 
   if (params.patient) {
