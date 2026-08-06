@@ -17,9 +17,9 @@ const SESSION_TTL = '12h'
 const OTP_TTL_MS = 10 * 60 * 1000 // 10 minutes
 const MAX_OTP_ATTEMPTS = 5
 
-// Generic SMTP, not tied to one provider — works with Brevo's free tier (300
-// emails/day, no time limit, no card required), or any other SMTP relay if that ever
-// changes. Only constructed if SMTP_HOST is actually set (see sendOtpEmail below).
+// Generic SMTP, not tied to one provider — any relay works, so switching providers is
+// a config change and never a code change. Only constructed if SMTP_HOST is actually
+// set (see sendOtpEmail below).
 const SENDER_EMAIL = process.env.SMTP_FROM
 let transporter = null
 function getTransporter() {
@@ -27,7 +27,7 @@ function getTransporter() {
   transporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
     port: Number(process.env.SMTP_PORT) || 587,
-    secure: false, // false = STARTTLS on 587, which Brevo and most providers expect
+    secure: false, // false = STARTTLS on 587, which most providers expect
     auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
   })
   return transporter
@@ -160,7 +160,7 @@ export async function verifyChallenge(challengeId, code, expectedPurpose) {
   return { ok: true, userId: challenge.user_id }
 }
 
-// ---------- email delivery (AWS SES) ----------
+// ---------- email delivery (SMTP) ----------
 
 export async function sendOtpEmail(toEmail, code) {
   if (!SENDER_EMAIL || !process.env.SMTP_HOST) {
