@@ -139,7 +139,49 @@ function capabilityStatement() {
   }
 }
 
-async function processTransactionBundle(bundle) {
+// Where an Encounter happened, resolved from the authenticated user's database row.
+//
+// Deliberately not read from the session token. location_id postdates every session
+// issued before this branch, and sessions last 12 hours, so tokens in flight across a
+// deploy simply do not carry it. userRow is the row already fetched for the suspension
+// check on every /fhir/* request, so this adds no user query, only a Location read, and
+// not even that for an account with no linked Location.
+async function resolveFacility(userRow) {
+  const locationId = userRow?.location_id
+  if (!locationId) return null
+  const location = await store.readResource('Location', locationId)
+  return {
+    locationReference: `Location/${locationId}`,
+    organizationReference: location?.managingOrganization?.reference || null,
+  }
+}
+
+// Stamps an Encounter with the facility it happened at, from the server's own view of
+// who is writing it. The client never gets a say.
+//
+// Unconditional overwrite, not fill-when-absent: whatever the client sent for these two
+// fields is deleted before anything is written. Filling only blanks would leave a
+// doctored request free to supply its own serviceProvider, which is forgeable
+// attribution with an extra step rather than a fix. This is the counterpart to
+// buildEncounterResource on the client, which deliberately does not set either field.
+//
+// When the writer has no linked Location the fields are removed entirely rather than
+// written empty or with a placeholder. A dangling Organization/undefined would be worse
+// than an absent field: it reads as a resolvable reference and fails later, at read
+// time, far from the cause. An absent field is honestly absent.
+function applyFacilityStamp(resource, facility) {
+  if (!resource || typeof resource !== 'object') return resource
+  delete resource.serviceProvider
+  delete resource.location
+  if (!facility) return resource
+  if (facility.organizationReference) {
+    resource.serviceProvider = { reference: facility.organizationReference }
+  }
+  resource.location = [{ location: { reference: facility.locationReference } }]
+  return resource
+}
+
+async function processTransactionBundle(bundle, facility) {
   const idMap = {}
   const responseEntries = []
   for (const entry of bundle.entry) {
@@ -147,6 +189,9 @@ async function processTransactionBundle(bundle) {
     const url = entry.request?.url || ''
     const [resourceType, idFromUrl] = url.split('/')
     let resource = rewriteReferences(entry.resource, idMap)
+    if (resource?.resourceType === 'Encounter' || resourceType === 'Encounter') {
+      applyFacilityStamp(resource, facility)
+    }
 
     let saved
     if (method === 'PUT' && idFromUrl) {
@@ -563,6 +608,14 @@ const server = createServer(async (req, res) => {
     }
     currentUser = current
 
+    // Resolved lazily and at most once per request: only an Encounter write needs it,
+    // and stillActive is the row already read above for the suspension check.
+    let facilityCache
+    const facility = async () => {
+      if (facilityCache === undefined) facilityCache = await resolveFacility(stillActive)
+      return facilityCache
+    }
+
     if (isMetadata) {
       return finish(200, capabilityStatement())
     }
@@ -580,20 +633,24 @@ const server = createServer(async (req, res) => {
         if (bundleTypes.some((t) => DIRECTORY_RESOURCE_TYPES.has(t))) {
           return finish(403, operationOutcome(403, 'Directory resources are managed by administrators.'))
         }
-        return finish(200, await processTransactionBundle(body))
+        return finish(200, await processTransactionBundle(body, await facility()))
       }
       return finish(400, operationOutcome(400, 'Expected a transaction Bundle at the base URL.'))
     }
 
     if (req.method === 'POST' && resourceType && !id) {
       const body = await readBody(req)
-      const saved = await store.createResource(resourceType, body || {})
+      const resource = body || {}
+      if (resourceType === 'Encounter') applyFacilityStamp(resource, await facility())
+      const saved = await store.createResource(resourceType, resource)
       return finish(201, saved, { Location: `${resourceType}/${saved.id}` })
     }
 
     if (req.method === 'PUT' && resourceType && id) {
       const body = await readBody(req)
-      const saved = await store.updateResource(resourceType, id, body || {})
+      const resource = body || {}
+      if (resourceType === 'Encounter') applyFacilityStamp(resource, await facility())
+      const saved = await store.updateResource(resourceType, id, resource)
       return finish(200, saved)
     }
 

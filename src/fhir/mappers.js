@@ -39,6 +39,15 @@ export function buildConsentResource(patientId, existingId) {
   }
 }
 
+// Does not set serviceProvider or location, and should not. Where an encounter happened
+// is stamped by the server from the authenticated user's own row, in applyFacilityStamp
+// in server/index.js, which discards whatever the client sent for those two fields
+// before writing. Attribution a client can assert is attribution a client can forge.
+//
+// The consequence is that the stored Encounter has two fields this builder never
+// produced, so what comes back from a read will not match what was sent. That is
+// deliberate. If you are here because a stored Encounter has a serviceProvider you
+// cannot find in this file, the server put it there.
 export function buildEncounterResource(patientId, meta, existingId) {
   return {
     resourceType: 'Encounter',
