@@ -62,10 +62,10 @@ export function listAdminUsers() {
   return request('admin/users', { method: 'GET' })
 }
 
-export function createAdminUser({ email, name, role, department, organization, tempPassword }) {
+export function createAdminUser({ email, name, role, locationId, organization, tempPassword }) {
   return request('admin/users', {
     method: 'POST',
-    body: JSON.stringify({ email, name, role, department, organization, tempPassword }),
+    body: JSON.stringify({ email, name, role, locationId, organization, tempPassword }),
   })
 }
 

@@ -2,25 +2,15 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import * as authApi from '../../services/authApi'
+import * as fhir from '../../services/fhirClient'
 import TraceRule from '../../components/TraceRule'
 import Brand from '../../components/Brand'
 
-// A starting list, not a hard boundary — the backend only requires a non-empty
-// string, so this can be edited here without a migration if a hospital's structure
-// doesn't match it.
-const DEPARTMENTS = [
-  'Emergency',
-  'Internal Medicine',
-  'Surgery',
-  'Pediatrics',
-  'Obstetrics & Gynecology',
-  'Cardiology',
-  'ICU',
-  'Radiology',
-  'Laboratory',
-  'Pharmacy',
-  'Outpatient Clinic',
-]
+// Departments used to be a hardcoded list of strings here. They are Location resources
+// now, managed on the departments screen, so this picker is sourced from whatever that
+// facility actually set up. Talks to fhirClient rather than dataService for the same
+// reason AdminLocations does: dataService logs an AuditEvent per save, and
+// administrators are not permitted to write AuditEvent.
 
 function generateTempPassword() {
   // Not meant to be memorable — the recipient is expected to change it at first
@@ -32,8 +22,9 @@ function generateTempPassword() {
 export default function AdminUsers() {
   const { user, signOut } = useAuth()
   const [users, setUsers] = useState([])
+  const [locations, setLocations] = useState([])
   const [loading, setLoading] = useState(true)
-  const [form, setForm] = useState({ email: '', name: '', role: 'doctor', department: DEPARTMENTS[0], organization: '' })
+  const [form, setForm] = useState({ email: '', name: '', role: 'doctor', locationId: '', organization: '' })
   const [tempPassword, setTempPassword] = useState('')
   const [error, setError] = useState('')
   const [lastCreated, setLastCreated] = useState(null)
@@ -43,7 +34,32 @@ export default function AdminUsers() {
     setLoading(true)
     const res = await authApi.listAdminUsers()
     if (res.ok) setUsers(res.users)
+
+    // Locations are needed for two things: the picker below, and resolving the
+    // location_id on existing rows to a readable name in the roster.
+    const claim = await authApi.getClaimedOrganization()
+    if (claim.ok && claim.organizationId) {
+      try {
+        const found = await fhir.searchResource('Location', { organization: claim.organizationId })
+        setLocations(found)
+        setForm((f) => (f.locationId ? f : { ...f, locationId: found[0]?.id || '' }))
+      } catch (e) {
+        setError(`Could not load departments: ${e.message}`)
+      }
+    }
     setLoading(false)
+  }
+
+  // Read precedence, deliberately explicit rather than reading one column and hoping.
+  // A Location reference wins where one is set. The free-text department column is
+  // only consulted for accounts created before departments became resources, and those
+  // accounts are left exactly as they are. Never both, and never blank for a new
+  // account whose department column is NULL by design.
+  function departmentLabel(u) {
+    if (u.location_id) {
+      return locations.find((l) => l.id === u.location_id)?.name || 'Unknown department'
+    }
+    return u.department || null
   }
 
   useEffect(() => {
@@ -61,13 +77,13 @@ export default function AdminUsers() {
     setError('')
     const payload = {
       ...form,
-      department: form.role === 'administrator' ? null : form.department,
+      locationId: form.role === 'administrator' ? null : form.locationId,
       organization: form.role === 'administrator' ? form.organization.trim() : undefined,
     }
     const res = await authApi.createAdminUser({ ...payload, tempPassword })
     if (!res.ok) return setError(res.error)
     setLastCreated({ email: form.email, tempPassword })
-    setForm({ email: '', name: '', role: 'doctor', department: DEPARTMENTS[0], organization: '' })
+    setForm({ email: '', name: '', role: 'doctor', locationId: locations[0]?.id || '', organization: '' })
     setTempPassword('')
     refresh()
   }
@@ -142,12 +158,20 @@ export default function AdminUsers() {
               {needsDepartment && (
                 <div className="field" style={{ width: 200 }}>
                   <label>Department <span className="req">*</span></label>
-                  <select value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })}>
-                    {DEPARTMENTS.map((d) => (
-                      <option key={d} value={d}>
-                        {d}
-                      </option>
-                    ))}
+                  <select
+                    value={form.locationId}
+                    onChange={(e) => setForm({ ...form, locationId: e.target.value })}
+                    disabled={locations.length === 0}
+                  >
+                    {locations.length === 0 ? (
+                      <option value="">No departments yet</option>
+                    ) : (
+                      locations.map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.name}
+                        </option>
+                      ))
+                    )}
                   </select>
                 </div>
               )}
@@ -168,6 +192,12 @@ export default function AdminUsers() {
             {!needsOrganization && (
               <p className="hint" style={{ marginBottom: 12 }}>
                 They'll be added to {user?.organization || 'your'} organization, same as your account.
+              </p>
+            )}
+            {needsDepartment && locations.length === 0 && (
+              <p className="hint" style={{ marginBottom: 12 }}>
+                No departments set up yet. Add them on{' '}
+                <Link to="/admin/locations">Departments and wards</Link> first, then come back.
               </p>
             )}
             {tempPassword && (
@@ -200,7 +230,7 @@ export default function AdminUsers() {
                 <strong>{u.name}</strong>
                 <div className="mono hint">
                   {u.email} · {u.role}
-                  {u.department ? ` · ${u.department}` : ''}
+                  {departmentLabel(u) ? ` · ${departmentLabel(u)}` : ''}
                   {u.organization ? ` · ${u.organization}` : ''}
                 </div>
               </div>

@@ -225,6 +225,10 @@ export async function findUserByIdAny(id) {
   return res.rows[0] || null
 }
 
+// locationId is the Location resource a staff account belongs to. department is the
+// older free-text column and is left null for anything created from here on; it is
+// still returned because accounts that predate location_id are the only place it is
+// populated, and readers fall back to it. See the column comment in db.js.
 export async function createUser({
   email,
   name,
@@ -232,13 +236,14 @@ export async function createUser({
   passwordHash,
   department = null,
   organization = null,
+  locationId = null,
   forcePasswordChange = true,
 }) {
   const res = await pool.query(
-    `INSERT INTO users (email, name, role, password_hash, department, organization, force_password_change)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     RETURNING id, email, name, role, department, organization, active, force_password_change, created_at`,
-    [email, name, role, passwordHash, department, organization, forcePasswordChange]
+    `INSERT INTO users (email, name, role, password_hash, department, organization, location_id, force_password_change)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id, email, name, role, department, organization, location_id, active, force_password_change, created_at`,
+    [email, name, role, passwordHash, department, organization, locationId, forcePasswordChange]
   )
   return res.rows[0]
 }
@@ -251,7 +256,7 @@ export async function createUser({
 export async function setUserActive(userId, active) {
   const res = await pool.query(
     `UPDATE users SET active = $1 WHERE id = $2
-     RETURNING id, email, name, role, department, organization, active, force_password_change, created_at`,
+     RETURNING id, email, name, role, department, organization, location_id, active, force_password_change, created_at`,
     [active, userId]
   )
   return res.rows[0] || null
@@ -291,7 +296,7 @@ export async function claimOrganization(userId, organizationId) {
 
 export async function listUsers(organization) {
   const res = await pool.query(
-    `SELECT id, email, name, role, department, organization, active, created_at FROM users
+    `SELECT id, email, name, role, department, organization, location_id, active, created_at FROM users
      WHERE organization = $1
      ORDER BY created_at DESC`,
     [organization]

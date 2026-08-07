@@ -429,7 +429,7 @@ const server = createServer(async (req, res) => {
           const email = (body?.email || '').trim().toLowerCase()
           const name = (body?.name || '').trim()
           const role = body?.role
-          const department = (body?.department || '').trim() || null
+          const locationId = (body?.locationId || '').trim() || null
 
           const tempPassword = body?.tempPassword || ''
 
@@ -437,8 +437,24 @@ const server = createServer(async (req, res) => {
           if (!['administrator', 'doctor', 'nurse', 'technician'].includes(role)) {
             return finish(400, { error: 'Role must be administrator, doctor, nurse, or technician.' })
           }
-          if (role !== 'administrator' && !department) {
-            return finish(400, { error: 'Department is required for doctor, nurse, and technician accounts.' })
+
+          // Departments are Location resources now, so a new account references one
+          // instead of carrying a free-text string. The Location has to belong to the
+          // facility this administrator claimed, otherwise an administrator at one
+          // hospital could attach staff to another hospital's department. The old
+          // free-text department column is left NULL on everything created from here.
+          if (role !== 'administrator') {
+            if (!locationId) {
+              return finish(400, { error: 'A department is required for doctor, nurse, and technician accounts.' })
+            }
+            const claimedOrganizationId = await auth.getClaimedOrganizationId(current.id)
+            if (!claimedOrganizationId) {
+              return finish(400, { error: 'Set up your facility and its departments before adding staff.' })
+            }
+            const location = await store.readResource('Location', locationId)
+            if (location?.managingOrganization?.reference !== `Organization/${claimedOrganizationId}`) {
+              return finish(400, { error: 'That department is not part of your facility.' })
+            }
           }
           if (tempPassword.length < 12) {
             return finish(400, { error: 'Temporary password must be at least 12 characters.' })
@@ -464,7 +480,7 @@ const server = createServer(async (req, res) => {
           }
 
           const passwordHash = await auth.hashPassword(tempPassword)
-          const created = await auth.createUser({ email, name, role, passwordHash, department, organization })
+          const created = await auth.createUser({ email, name, role, passwordHash, locationId, organization })
           return finish(201, { user: created })
         }
 
