@@ -169,6 +169,27 @@ async function resolveFacility(userRow) {
 // written empty or with a placeholder. A dangling Organization/undefined would be worse
 // than an absent field: it reads as a resolvable reference and fails later, at read
 // time, far from the cause. An absent field is honestly absent.
+//
+// PRECONDITION, and it is load-bearing: the unconditional overwrite is safe ONLY while
+// cross-organization access is impossible. It runs on update as well as create, so an
+// Encounter is re-stamped by whoever writes it last. Today that cannot change the
+// answer, because every writer who can reach a given Encounter is at the same facility.
+//
+// The moment a clinician at one organization can write an Encounter belonging to
+// another, this silently re-attributes where care happened on every amend: an encounter
+// that took place at Hospital A, amended by someone at Hospital B, is rewritten to B and
+// the original facility is gone with no record that it changed. In a system whose whole
+// purpose is attributing records to the right facility, that is data corruption rather
+// than a metadata nit, and nothing surfaces it.
+//
+// Therefore: enabling cross-organization writes REQUIRES changing this in the same
+// change, not as a follow-up. Preserve the stored serviceProvider and location on
+// update, and stamp only when they are absent. That stays unforgeable, because the
+// preserved value is read back from the database rather than taken from the request.
+// The point is not rewriting history on amend; it is not about trusting the client.
+//
+// If you are here from the org-scoping / tenant work in store.js, this is the coupling:
+// that change and this one ship together or the attribution silently rots.
 function applyFacilityStamp(resource, facility) {
   if (!resource || typeof resource !== 'object') return resource
   delete resource.serviceProvider
