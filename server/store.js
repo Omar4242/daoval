@@ -5,9 +5,67 @@
 
 import { randomUUID } from 'crypto'
 import { pool, migrate } from './db.js'
+import { isScopedResourceType } from './resourceTypes.js'
 
 export async function load() {
   await migrate()
+}
+
+// ---------- tenancy scope ----------
+//
+// Every read below takes an organization scope as a required positional argument,
+// separate from the params bag. That separation is the whole point, and it is worth
+// being explicit about why, because the obvious implementation is wrong here.
+//
+// searchResources starts from every row of a type and *subtracts* using whichever
+// params are present; a param nobody recognises simply doesn't narrow anything. If
+// the organization scope were one more optional key in that bag, forgetting it — or
+// resolving it to undefined — would return the unfiltered set. The permissive base
+// case is not a bug that can be guarded, it is the shape of the function.
+//
+// So the unfiltered path is deleted rather than guarded. A caller supplies either a
+// real organization id or SYSTEM_SCOPE, and anything else throws before a query is
+// built. There is no argument value that means "no opinion": omitting the scope is a
+// programming error and surfaces as a 500 on the first request from that call site,
+// not as a silent full-table read that looks like it works.
+//
+// SYSTEM_SCOPE is deliberate, greppable, and internal-only — `grep -rn SYSTEM_SCOPE
+// server/` lists every unscoped read in the codebase. It is a Symbol precisely so no
+// string arriving from a request body, query param, or JWT claim can ever equal it.
+export const SYSTEM_SCOPE = Symbol('SYSTEM_SCOPE')
+
+// Throws unless the scope is usable. Note what is NOT here: no null branch, no
+// default, no "unknown scope means everything". null and undefined fall through to
+// the throw, which is the behaviour the route layer depends on.
+//
+// LOAD-BEARING: a null scope must never be translated into `organization_id IS NULL`.
+// That would turn "we could not work out who is asking" into a query that matches
+// every unstamped row — the exact leak this function exists to prevent. Unstamped
+// rows are unreachable, not public.
+function assertScope(scope, callSite) {
+  if (scope === SYSTEM_SCOPE) return
+  if (typeof scope === 'string' && scope.trim() !== '') return
+  throw new Error(
+    `${callSite}: an organization scope is required. Pass an organization id, or ` +
+      `SYSTEM_SCOPE for a deliberate server-internal read. Got ${
+        scope === null ? 'null' : typeof scope
+      }. This is a call-site bug, not a data problem — no rows were read.`
+  )
+}
+
+// The SQL fragment applying the scope, plus the value to bind. Two cases produce no
+// predicate, and they are different from each other:
+//
+//   - SYSTEM_SCOPE: the caller has deliberately asked for an unscoped read.
+//   - a directory resource type: not PHI, shared across organizations by design (see
+//     resourceTypes.js). The scope is still asserted, so if a type ever moves out of
+//     the directory set, every call site is already passing a real one.
+//
+// Neither case is reachable by omission — assertScope has already run.
+function scopePredicate(resourceType, scope, nextParamIndex) {
+  if (scope === SYSTEM_SCOPE) return { sql: '', values: [] }
+  if (!isScopedResourceType(resourceType)) return { sql: '', values: [] }
+  return { sql: ` AND organization_id = $${nextParamIndex}`, values: [scope.trim()] }
 }
 
 export async function createResource(resourceType, resource, forcedId) {
@@ -52,18 +110,26 @@ export async function updateResource(resourceType, id, resource) {
   return stamped
 }
 
-export async function readResource(resourceType, id) {
+// Returns null both for "no such row" and for "that row belongs to another
+// organization" — the caller cannot tell the two apart, which is why the route layer
+// answers 404 rather than 403 for a cross-organization id. A 403 would confirm the
+// resource exists somewhere, which is itself a disclosure across a tenancy boundary.
+export async function readResource(resourceType, id, scope) {
+  assertScope(scope, `readResource(${resourceType}/${id})`)
+  const { sql, values } = scopePredicate(resourceType, scope, 3)
   const res = await pool.query(
-    `SELECT data FROM fhir_resources WHERE resource_type = $1 AND id = $2`,
-    [resourceType, id]
+    `SELECT data FROM fhir_resources WHERE resource_type = $1 AND id = $2${sql}`,
+    [resourceType, id, ...values]
   )
   return res.rows[0]?.data || null
 }
 
-export async function listResources(resourceType) {
+export async function listResources(resourceType, scope) {
+  assertScope(scope, `listResources(${resourceType})`)
+  const { sql, values } = scopePredicate(resourceType, scope, 2)
   const res = await pool.query(
-    `SELECT data FROM fhir_resources WHERE resource_type = $1`,
-    [resourceType]
+    `SELECT data FROM fhir_resources WHERE resource_type = $1${sql}`,
+    [resourceType, ...values]
   )
   return res.rows.map((r) => r.data)
 }
@@ -109,8 +175,15 @@ function nameText(resource) {
 // Same small FHIR-ish search surface as the demo backend supported — enough for this
 // app's frontend (name/identifier/organization/patient-reference lookups + date sort),
 // not a general FHIR search implementation.
-export async function searchResources(resourceType, params) {
-  let results = await listResources(resourceType)
+//
+// The scope is a separate argument sitting *before* params on purpose. Everything
+// below narrows an already-scoped set: the filtering here runs in Node, over rows
+// Postgres has already restricted to one organization, so no param — recognised,
+// unrecognised, or absent — can widen the result past the tenancy boundary. The
+// permissive "unknown param matches everything" behaviour survives, but "everything"
+// now means everything in the caller's own organization.
+export async function searchResources(resourceType, scope, params) {
+  let results = await listResources(resourceType, scope)
 
   if (params.name) {
     const term = params.name.toLowerCase()
@@ -160,8 +233,14 @@ export async function searchResources(resourceType, params) {
   return results
 }
 
+// Runs at boot, before any request exists, so there is no caller organization to scope
+// to — hence SYSTEM_SCOPE. The seeds are created with organization_id NULL and are
+// therefore invisible to every organization once scoped reads are enforced. That is
+// accepted rather than worked around: these are demo rows, and giving the seed path
+// its own way to invent an organization would be a second, untested code path for
+// stamping tenancy. A real deployment gets its patients from RegisterPatient, not here.
 export async function seedIfEmpty() {
-  const existing = await listResources('Patient')
+  const existing = await listResources('Patient', SYSTEM_SCOPE)
   if (existing.length > 0) return
   const p1 = await createResource('Patient', {
     name: [{ text: 'Mona Adel Ibrahim', use: 'official' }],
