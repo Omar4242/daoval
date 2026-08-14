@@ -77,6 +77,38 @@ Encrypt). DuckDNS for the domain (free), since a paid domain wasn't set up yet.
   requires a valid session on every `/fhir/*` route, and `fhirClient.js` sends
   credentials on every request. Confirmed with a real request test (401 without a
   session, 200 with one) before shipping.
+- **A second PHI access-control gap existed and was fixed: cross-organization
+  reads.** Requiring a session fixed "logged out people can read patient data"; it
+  did not fix "any logged-in clinician can read *every* organization's patient
+  data." `GET /fhir/Patient` returned every patient row in the database regardless
+  of which facility the caller worked at. `fhir_resources` now carries an
+  `organization_id` column, reads are filtered on it in SQL, and the store's read
+  functions take the scope as a required argument that throws when absent — the
+  unfiltered code path was deleted rather than guarded, because the store's search
+  starts from every row and subtracts, so a missing filter would otherwise have
+  returned everything while looking like working code.
+
+  Three things are true about the fix, and the third matters: it closes
+  cross-organization reads, it refuses writes from an account whose organization
+  can't be determined, and it does **not** close cross-organization writes to a
+  *guessed* resource id. That last hole predates this work and is still open — a
+  clinician who knows another facility's Encounter id can still overwrite its
+  body. What is guaranteed is that such a write cannot move the row between
+  organizations, because `organization_id` is written once and preserved on every
+  later write. Closing it properly is its own change, deliberately separated
+  because a target-row owner check touches the facility-stamp coupling documented
+  in `server/index.js`.
+
+  Directory resources (`Organization`, `Location`, `Practitioner`) are
+  deliberately shared across organizations — they carry no PHI, and scoping them
+  would deadlock setup, since a new administrator could not read back the
+  Organization they just created in order to claim it.
+
+  **Unstamped rows are unreachable, not public.** A row with a NULL
+  `organization_id` matches no organization's scope, so anything that predates the
+  column is invisible until backfilled by `server/backfill-organization-id.js`.
+  That script derives ownership from evidence in the data and refuses to guess
+  when there isn't any; it exits non-zero if any row is left unattributed.
 - **Interoperability with other hospital systems doesn't exist yet.** See
   `INTEROPERABILITY_PLAN.md` — this is the largest remaining piece of Daoval's actual
   mission (unifying fragmented EHRs) and hasn't been started. Currently Daoval only
