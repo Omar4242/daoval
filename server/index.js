@@ -680,12 +680,45 @@ const server = createServer(async (req, res) => {
 
     // The tenancy scope for this request, off the same cached Location read. Null means
     // the caller's organization could not be established — see organizationIdFromFacility
-    // for the four ways that happens. Nothing consumes this yet; the commit that enables
-    // enforcement refuses the request outright when it is null.
+    // for the four ways that happens.
     const callerOrganization = async () => organizationIdFromFacility(await facility())
 
     if (isMetadata) {
       return finish(200, capabilityStatement())
+    }
+
+    // ---- tenancy: one scope for the whole request, resolved before anything touches
+    // the store ----
+    //
+    // Directory types are shared across organizations by design (see resourceTypes.js)
+    // and read unscoped. Everything else is PHI and requires a resolved organization.
+    //
+    // Note what is NOT branched on here: the request method. An unresolvable
+    // organization refuses reads and writes alike, and the write half is not an
+    // afterthought. A clinician the server cannot attribute would otherwise create rows
+    // with organization_id NULL — rows invisible to every organization including their
+    // own author. "I wrote an encounter and it vanished" is the same silent failure as
+    // a leak, pointed the other way, and it is worse for being discovered in a clinical
+    // setting rather than a security review.
+    //
+    // This refusal is not a cross-organization write check. Nothing here reads the
+    // target row or compares it to the caller, so no cross-organization write path is
+    // opened or closed by it, and the facility stamp's precondition is untouched.
+    const scope = isDirectory ? store.SYSTEM_SCOPE : await callerOrganization()
+    if (!scope) {
+      // Deliberately specific about the cause rather than a bare "forbidden". The
+      // person reading this is a clinician who cannot see any patients, and the fix is
+      // administrative — an account not linked to a department. A vague message here
+      // turns a five-minute fix into a support call about the app being broken.
+      return finish(
+        403,
+        operationOutcome(
+          403,
+          'This account is not linked to a department, so the organization its records ' +
+            'belong to cannot be determined. Ask an administrator to assign your account ' +
+            'to a department.'
+        )
+      )
     }
 
     if (req.method === 'POST' && segments.length === 0) {
@@ -701,7 +734,7 @@ const server = createServer(async (req, res) => {
         if (bundleTypes.some((t) => DIRECTORY_RESOURCE_TYPES.has(t))) {
           return finish(403, operationOutcome(403, 'Directory resources are managed by administrators.'))
         }
-        return finish(200, await processTransactionBundle(body, await facility(), store.SYSTEM_SCOPE))
+        return finish(200, await processTransactionBundle(body, await facility(), scope))
       }
       return finish(400, operationOutcome(400, 'Expected a transaction Bundle at the base URL.'))
     }
@@ -710,7 +743,7 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req)
       const resource = body || {}
       if (resourceType === 'Encounter') applyFacilityStamp(resource, await facility())
-      const saved = await store.createResource(resourceType, resource, store.SYSTEM_SCOPE)
+      const saved = await store.createResource(resourceType, resource, scope)
       return finish(201, saved, { Location: `${resourceType}/${saved.id}` })
     }
 
@@ -718,7 +751,7 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req)
       const resource = body || {}
       if (resourceType === 'Encounter') applyFacilityStamp(resource, await facility())
-      const saved = await store.updateResource(resourceType, id, resource, store.SYSTEM_SCOPE)
+      const saved = await store.updateResource(resourceType, id, resource, scope)
       return finish(200, saved)
     }
 
@@ -729,14 +762,14 @@ const server = createServer(async (req, res) => {
     // been stamped, so the switch never leaves stamped-but-unenforced or
     // enforced-but-unstamped state in between.
     if (req.method === 'GET' && resourceType && id) {
-      const found = await store.readResource(resourceType, id, store.SYSTEM_SCOPE)
+      const found = await store.readResource(resourceType, id, scope)
       if (!found) return finish(404, operationOutcome(404, `${resourceType}/${id} not found`))
       return finish(200, found)
     }
 
     if (req.method === 'GET' && resourceType && !id) {
       const params = Object.fromEntries(url.searchParams.entries())
-      const results = await store.searchResources(resourceType, store.SYSTEM_SCOPE, params)
+      const results = await store.searchResources(resourceType, scope, params)
       return finish(200, {
         resourceType: 'Bundle',
         type: 'searchset',
