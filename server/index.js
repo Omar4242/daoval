@@ -199,7 +199,12 @@ function applyFacilityStamp(resource, facility) {
   return resource
 }
 
-async function processTransactionBundle(bundle, facility) {
+// scope is the organization the writer belongs to, recorded on every row this bundle
+// creates. It is distinct from `facility`: facility is the clinical attribution written
+// into the Encounter body (serviceProvider/location), scope is the authorization column
+// that decides who may later read the row. A bundle writes both, from the same
+// server-side view of who is calling, and neither is taken from the request.
+async function processTransactionBundle(bundle, facility, scope) {
   const idMap = {}
   const responseEntries = []
   for (const entry of bundle.entry) {
@@ -213,9 +218,9 @@ async function processTransactionBundle(bundle, facility) {
 
     let saved
     if (method === 'PUT' && idFromUrl) {
-      saved = await store.updateResource(resourceType, idFromUrl, resource)
+      saved = await store.updateResource(resourceType, idFromUrl, resource, scope)
     } else {
-      saved = await store.createResource(resourceType, resource)
+      saved = await store.createResource(resourceType, resource, scope)
     }
 
     if (entry.fullUrl) idMap[entry.fullUrl] = saved.id
@@ -661,7 +666,7 @@ const server = createServer(async (req, res) => {
         if (bundleTypes.some((t) => DIRECTORY_RESOURCE_TYPES.has(t))) {
           return finish(403, operationOutcome(403, 'Directory resources are managed by administrators.'))
         }
-        return finish(200, await processTransactionBundle(body, await facility()))
+        return finish(200, await processTransactionBundle(body, await facility(), store.SYSTEM_SCOPE))
       }
       return finish(400, operationOutcome(400, 'Expected a transaction Bundle at the base URL.'))
     }
@@ -670,7 +675,7 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req)
       const resource = body || {}
       if (resourceType === 'Encounter') applyFacilityStamp(resource, await facility())
-      const saved = await store.createResource(resourceType, resource)
+      const saved = await store.createResource(resourceType, resource, store.SYSTEM_SCOPE)
       return finish(201, saved, { Location: `${resourceType}/${saved.id}` })
     }
 
@@ -678,7 +683,7 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req)
       const resource = body || {}
       if (resourceType === 'Encounter') applyFacilityStamp(resource, await facility())
-      const saved = await store.updateResource(resourceType, id, resource)
+      const saved = await store.updateResource(resourceType, id, resource, store.SYSTEM_SCOPE)
       return finish(200, saved)
     }
 

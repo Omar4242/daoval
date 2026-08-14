@@ -68,8 +68,17 @@ function scopePredicate(resourceType, scope, nextParamIndex) {
   return { sql: ` AND organization_id = $${nextParamIndex}`, values: [scope.trim()] }
 }
 
-export async function createResource(resourceType, resource, forcedId) {
+// The organization_id a write should record. SYSTEM_SCOPE writes NULL, which is
+// unreachable by every scoped reader rather than visible to all of them — see the
+// column comment in db.js.
+function scopeColumnValue(scope, callSite) {
+  assertScope(scope, callSite)
+  return scope === SYSTEM_SCOPE ? null : scope.trim()
+}
+
+export async function createResource(resourceType, resource, scope, forcedId) {
   const id = forcedId || resource.id || randomUUID()
+  const organizationId = scopeColumnValue(scope, `createResource(${resourceType})`)
   const stamped = {
     ...resource,
     id,
@@ -77,18 +86,39 @@ export async function createResource(resourceType, resource, forcedId) {
     meta: { ...(resource.meta || {}), versionId: '1', lastUpdated: new Date().toISOString() },
   }
   await pool.query(
-    `INSERT INTO fhir_resources (resource_type, id, version_id, data, last_updated)
-     VALUES ($1, $2, 1, $3, now())
+    `INSERT INTO fhir_resources (resource_type, id, version_id, data, last_updated, organization_id)
+     VALUES ($1, $2, 1, $3, now(), $4)
      ON CONFLICT (resource_type, id)
      DO UPDATE SET version_id = fhir_resources.version_id + 1,
                     data = $3,
                     last_updated = now()`,
-    [resourceType, id, stamped]
+    [resourceType, id, stamped, organizationId]
   )
   return stamped
 }
 
-export async function updateResource(resourceType, id, resource) {
+// organization_id is absent from both DO UPDATE SET lists here and in createResource,
+// and that omission is the point rather than an oversight.
+//
+// The column is written once, when the row is first inserted, and never rewritten. A
+// row therefore cannot be moved between organizations by writing to it — not by an
+// amend, not by an upsert against an existing id, not by a request that supplies a
+// different organization than the one that created the row. Re-attributing a record to
+// a different facility is a correction, and a correction should be a deliberate,
+// visible operation rather than a side effect of saving an edit.
+//
+// This is the same discipline the facility stamp in index.js prescribes for
+// serviceProvider, arrived at independently for the authorization column: preserve on
+// update, stamp only when absent. It is deliberately not implemented by reading the
+// row and deciding in Node — the SQL simply has no way to express the overwrite.
+//
+// Note what this does NOT do: it does not check that the row being updated already
+// belongs to the caller's organization. A cross-organization write to a guessed id
+// remains possible exactly as it was before this branch, and closing it is its own
+// change. What is guaranteed here is narrower and worth stating precisely — such a
+// write cannot silently re-tenant the row it lands on.
+export async function updateResource(resourceType, id, resource, scope) {
+  const organizationId = scopeColumnValue(scope, `updateResource(${resourceType}/${id})`)
   const existing = await pool.query(
     `SELECT version_id FROM fhir_resources WHERE resource_type = $1 AND id = $2`,
     [resourceType, id]
@@ -101,11 +131,11 @@ export async function updateResource(resourceType, id, resource) {
     meta: { ...(resource.meta || {}), versionId: String(prevVersion + 1), lastUpdated: new Date().toISOString() },
   }
   await pool.query(
-    `INSERT INTO fhir_resources (resource_type, id, version_id, data, last_updated)
-     VALUES ($1, $2, $3, $4, now())
+    `INSERT INTO fhir_resources (resource_type, id, version_id, data, last_updated, organization_id)
+     VALUES ($1, $2, $3, $4, now(), $5)
      ON CONFLICT (resource_type, id)
      DO UPDATE SET version_id = $3, data = $4, last_updated = now()`,
-    [resourceType, id, prevVersion + 1, stamped]
+    [resourceType, id, prevVersion + 1, stamped, organizationId]
   )
   return stamped
 }
@@ -250,7 +280,7 @@ export async function seedIfEmpty() {
     telecom: [{ system: 'phone', value: '+20 10 1234 5678', use: 'mobile' }],
     address: [{ text: 'Giza, Egypt' }],
     communication: [{ language: { coding: [{ system: 'urn:ietf:bcp:47', code: 'ar' }] } }],
-  })
+  }, SYSTEM_SCOPE)
   const p2 = await createResource('Patient', {
     name: [{ text: 'Karim Youssef Fathy', use: 'official' }],
     identifier: [{ system: 'urn:daoval:national-id', value: '28805152233445' }],
@@ -258,6 +288,6 @@ export async function seedIfEmpty() {
     gender: 'male',
     telecom: [{ system: 'phone', value: '+20 11 9876 5432', use: 'mobile' }],
     address: [{ text: 'Cairo, Egypt' }],
-  })
+  }, SYSTEM_SCOPE)
   console.log(`daoval-server: seeded demo patients ${p1.id}, ${p2.id}`)
 }
