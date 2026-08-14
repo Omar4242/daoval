@@ -153,6 +153,35 @@ async function resolveFacility(userRow) {
   }
 }
 
+// The caller's organization as a bare id, derived from the facility already resolved
+// above — no extra query, and one chain rather than two competing ones.
+//
+// This is the tenancy scope for the whole request, so every way it can fail returns
+// null and every caller of it must treat null as "refuse", never as "unrestricted":
+//
+//   - the account has no linked Location (every account provisioned before the
+//     directory work is in exactly this state)
+//   - the Location row is missing
+//   - the Location has no managingOrganization
+//   - managingOrganization points at something that is not an Organization
+//
+// The last one is why this does not simply strip a prefix if present. A reference of
+// the wrong type, or an empty id after the slash, produces null rather than a scope
+// string that would silently match nothing or — worse, if the shape ever changed —
+// something. Only a well-formed 'Organization/<id>' is accepted.
+//
+// Administrators are deliberately absent from this chain. Their organization lives in
+// organization_admins, not via a Location, and they are refused every scoped resource
+// type by the role check further down, so resolving one for them would be dead code
+// that looks like an access path. If administrators ever gain access to a scoped type,
+// this is the function that has to learn about the claim table.
+function organizationIdFromFacility(facility) {
+  const ref = facility?.organizationReference
+  if (typeof ref !== 'string' || !ref.startsWith('Organization/')) return null
+  const id = ref.slice('Organization/'.length).trim()
+  return id === '' ? null : id
+}
+
 // Stamps an Encounter with the facility it happened at, from the server's own view of
 // who is writing it. The client never gets a say.
 //
@@ -648,6 +677,12 @@ const server = createServer(async (req, res) => {
       if (facilityCache === undefined) facilityCache = await resolveFacility(stillActive)
       return facilityCache
     }
+
+    // The tenancy scope for this request, off the same cached Location read. Null means
+    // the caller's organization could not be established — see organizationIdFromFacility
+    // for the four ways that happens. Nothing consumes this yet; the commit that enables
+    // enforcement refuses the request outright when it is null.
+    const callerOrganization = async () => organizationIdFromFacility(await facility())
 
     if (isMetadata) {
       return finish(200, capabilityStatement())
