@@ -35,10 +35,14 @@ export function parseArgs(argv) {
 // Groups a set of decisions into a stable, countable report. Used identically by every
 // backfill's dry run and apply output, so the two are directly comparable — an operator
 // checks that what applied is what the dry run said would apply.
+// `display` overrides `assigned` in the grouping key, for backfills whose assigned value
+// is per-row (a Practitioner id is the account's own id, so grouping on it would print
+// one line per account and report nothing). Such a backfill passes a constant label
+// describing the assignment instead.
 export function printGroupedPlan(decisions, { apply }) {
   const counts = new Map()
   for (const d of decisions) {
-    const k = `${d.group} -> ${d.assigned ?? '(left alone)'}`
+    const k = `${d.group} -> ${d.display ?? d.assigned ?? '(left alone)'}`
     counts.set(k, (counts.get(k) || 0) + 1)
   }
   console.log(apply ? 'APPLYING:' : 'DRY RUN — no rows will be written:')
