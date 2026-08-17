@@ -16,6 +16,18 @@ const BASE_PATH = '/fhir'
 // requests. Defaults to the Vite dev server's origin for local `npm run dev`.
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'http://localhost:5173'
 
+// The facility directory: who and where, never what happened to a patient. These are
+// the only resource types an administrator may touch under /fhir/*, and the only ones
+// a clinician may not write. Deliberately an exact allowlist rather than a "not
+// clinical" heuristic, so adding a new resource type never silently widens either
+// role's access.
+//
+// TRIPWIRE: PractitionerRole is not here yet, so administrators are currently refused
+// it and clinicians can write it. Add it to this set when PractitionerRole lands, or
+// admins will not be able to manage the resource that links practitioners to
+// departments.
+const DIRECTORY_RESOURCE_TYPES = new Set(['Organization', 'Location', 'Practitioner'])
+
 await store.load()
 await store.seedIfEmpty()
 
@@ -127,7 +139,70 @@ function capabilityStatement() {
   }
 }
 
-async function processTransactionBundle(bundle) {
+// Where an Encounter happened, resolved from the authenticated user's database row.
+//
+// Deliberately not read from the session token. location_id postdates every session
+// issued before this branch, and sessions last 12 hours, so tokens in flight across a
+// deploy simply do not carry it. userRow is the row already fetched for the suspension
+// check on every /fhir/* request, so this adds no user query, only a Location read, and
+// not even that for an account with no linked Location.
+async function resolveFacility(userRow) {
+  const locationId = userRow?.location_id
+  if (!locationId) return null
+  const location = await store.readResource('Location', locationId)
+  return {
+    locationReference: `Location/${locationId}`,
+    organizationReference: location?.managingOrganization?.reference || null,
+  }
+}
+
+// Stamps an Encounter with the facility it happened at, from the server's own view of
+// who is writing it. The client never gets a say.
+//
+// Unconditional overwrite, not fill-when-absent: whatever the client sent for these two
+// fields is deleted before anything is written. Filling only blanks would leave a
+// doctored request free to supply its own serviceProvider, which is forgeable
+// attribution with an extra step rather than a fix. This is the counterpart to
+// buildEncounterResource on the client, which deliberately does not set either field.
+//
+// When the writer has no linked Location the fields are removed entirely rather than
+// written empty or with a placeholder. A dangling Organization/undefined would be worse
+// than an absent field: it reads as a resolvable reference and fails later, at read
+// time, far from the cause. An absent field is honestly absent.
+//
+// PRECONDITION, and it is load-bearing: the unconditional overwrite is safe ONLY while
+// cross-organization access is impossible. It runs on update as well as create, so an
+// Encounter is re-stamped by whoever writes it last. Today that cannot change the
+// answer, because every writer who can reach a given Encounter is at the same facility.
+//
+// The moment a clinician at one organization can write an Encounter belonging to
+// another, this silently re-attributes where care happened on every amend: an encounter
+// that took place at Hospital A, amended by someone at Hospital B, is rewritten to B and
+// the original facility is gone with no record that it changed. In a system whose whole
+// purpose is attributing records to the right facility, that is data corruption rather
+// than a metadata nit, and nothing surfaces it.
+//
+// Therefore: enabling cross-organization writes REQUIRES changing this in the same
+// change, not as a follow-up. Preserve the stored serviceProvider and location on
+// update, and stamp only when they are absent. That stays unforgeable, because the
+// preserved value is read back from the database rather than taken from the request.
+// The point is not rewriting history on amend; it is not about trusting the client.
+//
+// If you are here from the org-scoping / tenant work in store.js, this is the coupling:
+// that change and this one ship together or the attribution silently rots.
+function applyFacilityStamp(resource, facility) {
+  if (!resource || typeof resource !== 'object') return resource
+  delete resource.serviceProvider
+  delete resource.location
+  if (!facility) return resource
+  if (facility.organizationReference) {
+    resource.serviceProvider = { reference: facility.organizationReference }
+  }
+  resource.location = [{ location: { reference: facility.locationReference } }]
+  return resource
+}
+
+async function processTransactionBundle(bundle, facility) {
   const idMap = {}
   const responseEntries = []
   for (const entry of bundle.entry) {
@@ -135,6 +210,9 @@ async function processTransactionBundle(bundle) {
     const url = entry.request?.url || ''
     const [resourceType, idFromUrl] = url.split('/')
     let resource = rewriteReferences(entry.resource, idMap)
+    if (resource?.resourceType === 'Encounter' || resourceType === 'Encounter') {
+      applyFacilityStamp(resource, facility)
+    }
 
     let saved
     if (method === 'PUT' && idFromUrl) {
@@ -371,7 +449,11 @@ const server = createServer(async (req, res) => {
       }
 
       // ---- administrator-only: provision doctor/nurse/administrator accounts ----
-      if (authPath === 'admin/users' || /^admin\/users\/[^/]+\/status$/.test(authPath)) {
+      if (
+        authPath === 'admin/users' ||
+        authPath === 'admin/organization' ||
+        /^admin\/users\/[^/]+\/status$/.test(authPath)
+      ) {
         const current = auth.getUserFromRequest(req)
         if (!current) return finish(401, { error: 'Not signed in.' })
         const stillActive = await auth.findUserById(current.id)
@@ -382,12 +464,38 @@ const server = createServer(async (req, res) => {
           return finish(200, { users: await auth.listUsers(current.organization) })
         }
 
+        // ---- which Organization resource this administrator has claimed ----
+        //
+        // The claim is how an account is tied to a facility. There is deliberately no
+        // automatic match from the free-text users.organization string: two different
+        // facilities can share a name, and silently merging them would be far worse
+        // than asking once. The administrator confirms explicitly, and that
+        // confirmation is the join.
+        if (req.method === 'GET' && authPath === 'admin/organization') {
+          return finish(200, { organizationId: await auth.getClaimedOrganizationId(current.id) })
+        }
+
+        if (req.method === 'POST' && authPath === 'admin/organization') {
+          const body = await readBody(req)
+          const organizationId = (body?.organizationId || '').trim()
+          if (!organizationId) return finish(400, { error: 'An organization id is required.' })
+
+          // The Organization resource itself is created through POST /fhir/Organization
+          // before this is called, so this only ever records a reference to one that
+          // already exists. Nothing here creates or edits a resource.
+          const existing = await store.readResource('Organization', organizationId)
+          if (!existing) return finish(404, { error: 'No such organization.' })
+
+          const claimed = await auth.claimOrganization(current.id, organizationId)
+          return finish(200, { organizationId: claimed })
+        }
+
         if (req.method === 'POST' && authPath === 'admin/users') {
           const body = await readBody(req)
           const email = (body?.email || '').trim().toLowerCase()
           const name = (body?.name || '').trim()
           const role = body?.role
-          const department = (body?.department || '').trim() || null
+          const locationId = (body?.locationId || '').trim() || null
 
           const tempPassword = body?.tempPassword || ''
 
@@ -395,8 +503,24 @@ const server = createServer(async (req, res) => {
           if (!['administrator', 'doctor', 'nurse', 'technician'].includes(role)) {
             return finish(400, { error: 'Role must be administrator, doctor, nurse, or technician.' })
           }
-          if (role !== 'administrator' && !department) {
-            return finish(400, { error: 'Department is required for doctor, nurse, and technician accounts.' })
+
+          // Departments are Location resources now, so a new account references one
+          // instead of carrying a free-text string. The Location has to belong to the
+          // facility this administrator claimed, otherwise an administrator at one
+          // hospital could attach staff to another hospital's department. The old
+          // free-text department column is left NULL on everything created from here.
+          if (role !== 'administrator') {
+            if (!locationId) {
+              return finish(400, { error: 'A department is required for doctor, nurse, and technician accounts.' })
+            }
+            const claimedOrganizationId = await auth.getClaimedOrganizationId(current.id)
+            if (!claimedOrganizationId) {
+              return finish(400, { error: 'Set up your facility and its departments before adding staff.' })
+            }
+            const location = await store.readResource('Location', locationId)
+            if (location?.managingOrganization?.reference !== `Organization/${claimedOrganizationId}`) {
+              return finish(400, { error: 'That department is not part of your facility.' })
+            }
           }
           if (tempPassword.length < 12) {
             return finish(400, { error: 'Temporary password must be at least 12 characters.' })
@@ -422,7 +546,7 @@ const server = createServer(async (req, res) => {
           }
 
           const passwordHash = await auth.hashPassword(tempPassword)
-          const created = await auth.createUser({ email, name, role, passwordHash, department, organization })
+          const created = await auth.createUser({ email, name, role, passwordHash, locationId, organization })
           return finish(201, { user: created })
         }
 
@@ -475,40 +599,79 @@ const server = createServer(async (req, res) => {
       // never be forced through the change. This is the real boundary.
       return finish(403, operationOutcome(403, 'Password must be changed before accessing patient data.'))
     }
+    const rest = url.pathname.slice(BASE_PATH.length).replace(/^\/+/, '')
+    const segments = rest.split('/').filter(Boolean)
+    const [resourceType, id] = segments
+
+    // The role checks below need to know which resource type is being addressed, so
+    // the path is parsed first. Nothing has been read from the database at this point.
+    const isMetadata = req.method === 'GET' && segments[0] === 'metadata'
+    const isDirectory = DIRECTORY_RESOURCE_TYPES.has(resourceType)
+    const isWrite = req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE'
+
     if (current.role === 'administrator') {
-      // Administrators manage staff accounts, not clinical/patient data. Enforced
-      // here (not just hidden in the UI) so a direct API call can't reach patient
-      // records with an administrator session either.
-      return finish(403, operationOutcome(403, 'Administrator accounts do not have access to patient records.'))
+      // Administrators manage staff accounts and the facility directory, never
+      // clinical/patient data. Enforced here (not just hidden in the UI) so a direct
+      // API call can't reach patient records with an administrator session either.
+      //
+      // The allowlist is exact: anything that is not one of the three directory types
+      // is refused, including a transaction Bundle at the base path. Bundles are
+      // refused because segments is empty for them, so resourceType is undefined and
+      // isDirectory is false. That matters: a Bundle can carry entries of any type, so
+      // letting one through here would be a way around this check.
+      if (!isMetadata && !isDirectory) {
+        return finish(403, operationOutcome(403, 'Administrator accounts do not have access to patient records.'))
+      }
+    } else if (isDirectory && isWrite) {
+      // Clinicians read the directory, because encounters need to reference the
+      // organization and location they happened in, but they never edit it.
+      return finish(403, operationOutcome(403, 'Directory resources are managed by administrators.'))
     }
     currentUser = current
 
-    const rest = url.pathname.slice(BASE_PATH.length).replace(/^\/+/, '')
-    const segments = rest.split('/').filter(Boolean)
+    // Resolved lazily and at most once per request: only an Encounter write needs it,
+    // and stillActive is the row already read above for the suspension check.
+    let facilityCache
+    const facility = async () => {
+      if (facilityCache === undefined) facilityCache = await resolveFacility(stillActive)
+      return facilityCache
+    }
 
-    if (req.method === 'GET' && segments[0] === 'metadata') {
+    if (isMetadata) {
       return finish(200, capabilityStatement())
     }
 
     if (req.method === 'POST' && segments.length === 0) {
       const body = await readBody(req)
       if (body?.resourceType === 'Bundle') {
-        return finish(200, await processTransactionBundle(body))
+        // Only clinicians reach this branch (administrators are refused above), and a
+        // Bundle can carry any resource type, so the directory allowlist has to be
+        // applied to its entries too. Without this, the clinician write ban above
+        // could be sidestepped by wrapping a Location in an encounter Bundle.
+        const bundleTypes = (body.entry || []).map(
+          (e) => e.resource?.resourceType || (e.request?.url || '').split('/')[0]
+        )
+        if (bundleTypes.some((t) => DIRECTORY_RESOURCE_TYPES.has(t))) {
+          return finish(403, operationOutcome(403, 'Directory resources are managed by administrators.'))
+        }
+        return finish(200, await processTransactionBundle(body, await facility()))
       }
       return finish(400, operationOutcome(400, 'Expected a transaction Bundle at the base URL.'))
     }
 
-    const [resourceType, id] = segments
-
     if (req.method === 'POST' && resourceType && !id) {
       const body = await readBody(req)
-      const saved = await store.createResource(resourceType, body || {})
+      const resource = body || {}
+      if (resourceType === 'Encounter') applyFacilityStamp(resource, await facility())
+      const saved = await store.createResource(resourceType, resource)
       return finish(201, saved, { Location: `${resourceType}/${saved.id}` })
     }
 
     if (req.method === 'PUT' && resourceType && id) {
       const body = await readBody(req)
-      const saved = await store.updateResource(resourceType, id, body || {})
+      const resource = body || {}
+      if (resourceType === 'Encounter') applyFacilityStamp(resource, await facility())
+      const saved = await store.updateResource(resourceType, id, resource)
       return finish(200, saved)
     }
 

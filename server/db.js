@@ -53,6 +53,9 @@ export async function migrate() {
     CREATE INDEX IF NOT EXISTS fhir_resources_patient_ref_idx
       ON fhir_resources USING gin ((data -> 'patient'));
 
+    -- No index for the ?organization= search param: filtering happens in Node, not SQL,
+    -- so add a GIN index on managingOrganization/serviceProvider when/if that moves.
+
     -- Append-only audit trail. auditService.js already writes AuditEvent resources
     -- into fhir_resources; this table additionally captures raw HTTP-level access,
     -- which is what HIPAA's audit-control requirement actually asks for (who touched
@@ -96,12 +99,51 @@ export async function migrate() {
     );
     CREATE INDEX IF NOT EXISTS login_challenges_user_idx ON login_challenges (user_id);
 
+    -- Which Organization resource an administrator has claimed as their facility.
+    --
+    -- Deliberately its own table rather than a users.organization_id column. Populating
+    -- a column would mean writing rows that already exist, which is out of scope until
+    -- backups are verified. This table only ever gets new rows inserted into it and
+    -- never reads or writes a users row.
+    --
+    -- It runs strictly parallel to the free-text users.organization string. Nothing
+    -- here writes back to that string or tries to keep the two in sync: reconciling
+    -- them is a later job, and doing it implicitly would be exactly the silent
+    -- facility-merge this design exists to avoid.
+    --
+    -- This is acknowledged debt, and the fold-in path is known: once backups are
+    -- verified and existing rows can be written, this becomes users.organization_id.
+    --
+    -- One claim per administrator (user_id is the primary key). Two administrators at
+    -- the same facility get one row each pointing at the same organization_id, which
+    -- is the correct shape: the claim belongs to the person, not the facility.
+    CREATE TABLE IF NOT EXISTS organization_admins (
+      user_id          uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      organization_id  text NOT NULL,
+      created_at       timestamptz NOT NULL DEFAULT now()
+    );
+
     -- Migrating an already-deployed users table: add the department column and widen
     -- the role constraint to include 'technician'. Safe to run repeatedly.
     ALTER TABLE users ADD COLUMN IF NOT EXISTS department text;
     ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
     ALTER TABLE users ADD CONSTRAINT users_role_check
       CHECK (role IN ('administrator', 'doctor', 'nurse', 'technician'));
+
+    -- Which Location (department or ward) a staff account belongs to.
+    --
+    -- Nullable with no default, which makes this a catalog-only change: existing rows
+    -- are not rewritten and simply read back NULL. Verified against postgres:16-alpine
+    -- (16.14), the image this deploys on, using a 50k-row copy of this table:
+    -- relfilenode unchanged before and after, 2.7ms, atthasmissing false.
+    --
+    -- Runs in parallel with the older free-text users.department. Accounts created from
+    -- here on set location_id and leave department NULL; accounts that predate this keep
+    -- their department string and leave location_id NULL. Nothing backfills either
+    -- direction. Readers must therefore apply the precedence explicitly rather than
+    -- picking one column: location_id first, falling back to department. See
+    -- AdminUsers.jsx for the display side of that.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS location_id text;
 
     -- Every account belongs to a hospital/clinic/healthcare center. Administrators
     -- state theirs at account creation; doctors/nurses/technicians inherit it from

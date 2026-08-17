@@ -14,6 +14,7 @@ import NewEncounter from './pages/NewEncounter'
 import ReviewSign from './pages/ReviewSign'
 import ViewAmend from './pages/ViewAmend'
 import AdminUsers from './pages/admin/AdminUsers'
+import AdminLocations from './pages/admin/AdminLocations'
 import ChangePassword from './pages/ChangePassword'
 import { useAuth } from './context/AuthContext'
 
@@ -57,6 +58,7 @@ export default function App() {
             <Route path="/patient/:patientId/encounter/:encounterId/review" element={<ProtectedRoute><ReviewSign /></ProtectedRoute>} />
             <Route path="/patient/:patientId/encounter/:encounterId/view" element={<ProtectedRoute><ViewAmend /></ProtectedRoute>} />
             <Route path="/admin/users" element={<ProtectedRoute requireRole="administrator"><AdminUsers /></ProtectedRoute>} />
+            <Route path="/admin/locations" element={<ProtectedRoute requireRole="administrator"><AdminLocations /></ProtectedRoute>} />
             <Route
               path="/change-password"
               element={
