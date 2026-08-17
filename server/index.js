@@ -7,6 +7,7 @@ import { createServer } from 'http'
 import * as store from './store.js'
 import { logAccess, pool } from './db.js'
 import * as auth from './authService.js'
+import { DIRECTORY_RESOURCE_TYPES } from './resourceTypes.js'
 
 const PORT = Number(process.env.PORT) || 3001
 const BASE_PATH = '/fhir'
@@ -16,17 +17,10 @@ const BASE_PATH = '/fhir'
 // requests. Defaults to the Vite dev server's origin for local `npm run dev`.
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'http://localhost:5173'
 
-// The facility directory: who and where, never what happened to a patient. These are
-// the only resource types an administrator may touch under /fhir/*, and the only ones
-// a clinician may not write. Deliberately an exact allowlist rather than a "not
-// clinical" heuristic, so adding a new resource type never silently widens either
-// role's access.
-//
-// TRIPWIRE: PractitionerRole is not here yet, so administrators are currently refused
-// it and clinicians can write it. Add it to this set when PractitionerRole lands, or
-// admins will not be able to manage the resource that links practitioners to
-// departments.
-const DIRECTORY_RESOURCE_TYPES = new Set(['Organization', 'Location', 'Practitioner'])
+// DIRECTORY_RESOURCE_TYPES now lives in resourceTypes.js, imported above. It moved
+// because store.js needs the same set to decide which types are tenancy-scoped, and
+// two copies of an access-control list is how the route and the store drift into
+// disagreeing about what counts as PHI.
 
 await store.load()
 await store.seedIfEmpty()
@@ -149,11 +143,43 @@ function capabilityStatement() {
 async function resolveFacility(userRow) {
   const locationId = userRow?.location_id
   if (!locationId) return null
-  const location = await store.readResource('Location', locationId)
+  // SYSTEM_SCOPE: resolving where the caller works cannot itself be scoped to where
+  // the caller works. Location is directory data in any case, and locationId comes
+  // from the authenticated user's own database row, never from the request.
+  const location = await store.readResource('Location', locationId, store.SYSTEM_SCOPE)
   return {
     locationReference: `Location/${locationId}`,
     organizationReference: location?.managingOrganization?.reference || null,
   }
+}
+
+// The caller's organization as a bare id, derived from the facility already resolved
+// above — no extra query, and one chain rather than two competing ones.
+//
+// This is the tenancy scope for the whole request, so every way it can fail returns
+// null and every caller of it must treat null as "refuse", never as "unrestricted":
+//
+//   - the account has no linked Location (every account provisioned before the
+//     directory work is in exactly this state)
+//   - the Location row is missing
+//   - the Location has no managingOrganization
+//   - managingOrganization points at something that is not an Organization
+//
+// The last one is why this does not simply strip a prefix if present. A reference of
+// the wrong type, or an empty id after the slash, produces null rather than a scope
+// string that would silently match nothing or — worse, if the shape ever changed —
+// something. Only a well-formed 'Organization/<id>' is accepted.
+//
+// Administrators are deliberately absent from this chain. Their organization lives in
+// organization_admins, not via a Location, and they are refused every scoped resource
+// type by the role check further down, so resolving one for them would be dead code
+// that looks like an access path. If administrators ever gain access to a scoped type,
+// this is the function that has to learn about the claim table.
+function organizationIdFromFacility(facility) {
+  const ref = facility?.organizationReference
+  if (typeof ref !== 'string' || !ref.startsWith('Organization/')) return null
+  const id = ref.slice('Organization/'.length).trim()
+  return id === '' ? null : id
 }
 
 // Stamps an Encounter with the facility it happened at, from the server's own view of
@@ -202,7 +228,12 @@ function applyFacilityStamp(resource, facility) {
   return resource
 }
 
-async function processTransactionBundle(bundle, facility) {
+// scope is the organization the writer belongs to, recorded on every row this bundle
+// creates. It is distinct from `facility`: facility is the clinical attribution written
+// into the Encounter body (serviceProvider/location), scope is the authorization column
+// that decides who may later read the row. A bundle writes both, from the same
+// server-side view of who is calling, and neither is taken from the request.
+async function processTransactionBundle(bundle, facility, scope) {
   const idMap = {}
   const responseEntries = []
   for (const entry of bundle.entry) {
@@ -216,9 +247,9 @@ async function processTransactionBundle(bundle, facility) {
 
     let saved
     if (method === 'PUT' && idFromUrl) {
-      saved = await store.updateResource(resourceType, idFromUrl, resource)
+      saved = await store.updateResource(resourceType, idFromUrl, resource, scope)
     } else {
-      saved = await store.createResource(resourceType, resource)
+      saved = await store.createResource(resourceType, resource, scope)
     }
 
     if (entry.fullUrl) idMap[entry.fullUrl] = saved.id
@@ -483,7 +514,12 @@ const server = createServer(async (req, res) => {
           // The Organization resource itself is created through POST /fhir/Organization
           // before this is called, so this only ever records a reference to one that
           // already exists. Nothing here creates or edits a resource.
-          const existing = await store.readResource('Organization', organizationId)
+          // SYSTEM_SCOPE: this is the bootstrap step that establishes which
+          // organization the administrator belongs to, so there is no prior scope to
+          // read it under. Scoping this would deadlock setup — a new administrator
+          // could never read back the Organization they just created in order to
+          // claim it.
+          const existing = await store.readResource('Organization', organizationId, store.SYSTEM_SCOPE)
           if (!existing) return finish(404, { error: 'No such organization.' })
 
           const claimed = await auth.claimOrganization(current.id, organizationId)
@@ -517,7 +553,12 @@ const server = createServer(async (req, res) => {
             if (!claimedOrganizationId) {
               return finish(400, { error: 'Set up your facility and its departments before adding staff.' })
             }
-            const location = await store.readResource('Location', locationId)
+            // SYSTEM_SCOPE, but the check immediately below is the real boundary: the
+            // Location is read unscoped and then required to belong to the
+            // organization this administrator has claimed. Scoping the read would be
+            // redundant with that, and would hide a mismatch as "not found" rather
+            // than the specific error the administrator needs to see.
+            const location = await store.readResource('Location', locationId, store.SYSTEM_SCOPE)
             if (location?.managingOrganization?.reference !== `Organization/${claimedOrganizationId}`) {
               return finish(400, { error: 'That department is not part of your facility.' })
             }
@@ -637,8 +678,47 @@ const server = createServer(async (req, res) => {
       return facilityCache
     }
 
+    // The tenancy scope for this request, off the same cached Location read. Null means
+    // the caller's organization could not be established — see organizationIdFromFacility
+    // for the four ways that happens.
+    const callerOrganization = async () => organizationIdFromFacility(await facility())
+
     if (isMetadata) {
       return finish(200, capabilityStatement())
+    }
+
+    // ---- tenancy: one scope for the whole request, resolved before anything touches
+    // the store ----
+    //
+    // Directory types are shared across organizations by design (see resourceTypes.js)
+    // and read unscoped. Everything else is PHI and requires a resolved organization.
+    //
+    // Note what is NOT branched on here: the request method. An unresolvable
+    // organization refuses reads and writes alike, and the write half is not an
+    // afterthought. A clinician the server cannot attribute would otherwise create rows
+    // with organization_id NULL — rows invisible to every organization including their
+    // own author. "I wrote an encounter and it vanished" is the same silent failure as
+    // a leak, pointed the other way, and it is worse for being discovered in a clinical
+    // setting rather than a security review.
+    //
+    // This refusal is not a cross-organization write check. Nothing here reads the
+    // target row or compares it to the caller, so no cross-organization write path is
+    // opened or closed by it, and the facility stamp's precondition is untouched.
+    const scope = isDirectory ? store.SYSTEM_SCOPE : await callerOrganization()
+    if (!scope) {
+      // Deliberately specific about the cause rather than a bare "forbidden". The
+      // person reading this is a clinician who cannot see any patients, and the fix is
+      // administrative — an account not linked to a department. A vague message here
+      // turns a five-minute fix into a support call about the app being broken.
+      return finish(
+        403,
+        operationOutcome(
+          403,
+          'This account is not linked to a department, so the organization its records ' +
+            'belong to cannot be determined. Ask an administrator to assign your account ' +
+            'to a department.'
+        )
+      )
     }
 
     if (req.method === 'POST' && segments.length === 0) {
@@ -654,7 +734,7 @@ const server = createServer(async (req, res) => {
         if (bundleTypes.some((t) => DIRECTORY_RESOURCE_TYPES.has(t))) {
           return finish(403, operationOutcome(403, 'Directory resources are managed by administrators.'))
         }
-        return finish(200, await processTransactionBundle(body, await facility()))
+        return finish(200, await processTransactionBundle(body, await facility(), scope))
       }
       return finish(400, operationOutcome(400, 'Expected a transaction Bundle at the base URL.'))
     }
@@ -663,7 +743,7 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req)
       const resource = body || {}
       if (resourceType === 'Encounter') applyFacilityStamp(resource, await facility())
-      const saved = await store.createResource(resourceType, resource)
+      const saved = await store.createResource(resourceType, resource, scope)
       return finish(201, saved, { Location: `${resourceType}/${saved.id}` })
     }
 
@@ -671,19 +751,25 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req)
       const resource = body || {}
       if (resourceType === 'Encounter') applyFacilityStamp(resource, await facility())
-      const saved = await store.updateResource(resourceType, id, resource)
+      const saved = await store.updateResource(resourceType, id, resource, scope)
       return finish(200, saved)
     }
 
+    // SYSTEM_SCOPE on both reads below is the pre-existing behaviour, preserved
+    // deliberately so this commit changes nothing observable. These two call sites are
+    // the cross-organization read hole, and they are switched to the caller's own
+    // organization in the commit that enables enforcement — after existing rows have
+    // been stamped, so the switch never leaves stamped-but-unenforced or
+    // enforced-but-unstamped state in between.
     if (req.method === 'GET' && resourceType && id) {
-      const found = await store.readResource(resourceType, id)
+      const found = await store.readResource(resourceType, id, scope)
       if (!found) return finish(404, operationOutcome(404, `${resourceType}/${id} not found`))
       return finish(200, found)
     }
 
     if (req.method === 'GET' && resourceType && !id) {
       const params = Object.fromEntries(url.searchParams.entries())
-      const results = await store.searchResources(resourceType, params)
+      const results = await store.searchResources(resourceType, scope, params)
       return finish(200, {
         resourceType: 'Bundle',
         type: 'searchset',

@@ -56,6 +56,34 @@ export async function migrate() {
     -- No index for the ?organization= search param: filtering happens in Node, not SQL,
     -- so add a GIN index on managingOrganization/serviceProvider when/if that moves.
 
+    -- Which organization owns this row. This is the tenancy boundary for PHI reads:
+    -- store.js filters on it in SQL, before any of the Node-side search-param logic
+    -- runs, so a caller can only ever narrow within their own organization.
+    --
+    -- Deliberately a real column rather than a value read out of the JSONB. The FHIR
+    -- body already spells facility three different ways (serviceProvider on Encounter,
+    -- managingOrganization on Location, a plain organization reference elsewhere), and
+    -- an access-control predicate must not depend on getting that spelling right per
+    -- resource type. It is also NOT the same thing as Encounter.serviceProvider: that
+    -- field is clinical attribution (where care happened), this column is authorization
+    -- (who may read the row). They agree for Encounters; only this column gates access.
+    --
+    -- Nullable with no default, which makes this a catalog-only change: existing rows
+    -- are not rewritten and read back NULL. Verified against postgres:16-alpine
+    -- (16.14), the image this deploys on, using a 50k-row (21MB) copy of this table:
+    -- relfilenode 16385 before and after, 2.438ms, atthasmissing false.
+    --
+    -- NULL is unreachable, not permissive. Scoped reads compare organization_id = $scope,
+    -- and NULL is never equal to anything in SQL, so an unstamped row is invisible to
+    -- every organization rather than visible to all of them. A null scope must never be
+    -- translated into "IS NULL" — see the guard in store.js, which throws first.
+    ALTER TABLE fhir_resources ADD COLUMN IF NOT EXISTS organization_id text;
+
+    -- Supports the scoped read predicate (resource_type, organization_id). Built in
+    -- 58ms on the same 50k-row copy.
+    CREATE INDEX IF NOT EXISTS fhir_resources_org_idx
+      ON fhir_resources (resource_type, organization_id);
+
     -- Append-only audit trail. auditService.js already writes AuditEvent resources
     -- into fhir_resources; this table additionally captures raw HTTP-level access,
     -- which is what HIPAA's audit-control requirement actually asks for (who touched
