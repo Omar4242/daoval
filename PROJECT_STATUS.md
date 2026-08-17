@@ -109,6 +109,18 @@ Encrypt). DuckDNS for the domain (free), since a paid domain wasn't set up yet.
   column is invisible until backfilled by `server/backfill-organization-id.js`.
   That script derives ownership from evidence in the data and refuses to guess
   when there isn't any; it exits non-zero if any row is left unattributed.
+
+  **Existing accounts are locked out until the identity backfills run.** Scope
+  resolves `users.location_id` → `Location` → `managingOrganization`, and every
+  account provisioned before the directory work has a NULL `location_id`, so those
+  clinicians get a 403 on all patient data. Administrators are unaffected — they
+  only need directory resources, which are never scoped — so there is always a
+  working human able to set the facility up. `TENANCY_MIGRATION.md` is the ordered
+  cutover runbook: an administrator creates the Organization and Locations, then
+  three backfill scripts attribute accounts, create Practitioners, and link
+  clinicians to departments, and finally the resource stamp is re-run. Skipping
+  that last step leaves clinicians with access to an empty database rather than a
+  403, which is the failure most likely to be misread as "the migration worked".
 - **Interoperability with other hospital systems doesn't exist yet.** See
   `INTEROPERABILITY_PLAN.md` — this is the largest remaining piece of Daoval's actual
   mission (unifying fragmented EHRs) and hasn't been started. Currently Daoval only

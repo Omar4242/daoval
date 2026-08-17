@@ -178,6 +178,39 @@ export async function migrate() {
     -- the administrator who provisions them (see server/index.js POST /auth/admin/users).
     ALTER TABLE users ADD COLUMN IF NOT EXISTS organization text;
 
+    -- Which Organization resource this account belongs to, as a resolved id rather than
+    -- the free-text organization string above.
+    --
+    -- This is the fold-in the organization_admins comment anticipated: that table exists
+    -- because populating a users column meant writing existing rows, which was out of
+    -- scope until backups were verified. They are verified now. organization_admins is
+    -- deliberately NOT dropped here — collapsing it is the same class of debt as the
+    -- free-text columns and does not ride along with a data migration.
+    --
+    -- Bookkeeping only. It is NOT part of the access-control path: PHI scope resolves
+    -- location_id -> Location -> managingOrganization, and that chain is untouched by
+    -- this work. Do not "simplify" the scope resolution to read this column without
+    -- redoing the end-to-end enforcement tests that cover the existing one.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS organization_id text;
+
+    -- Records that a Practitioner resource exists for this account.
+    --
+    -- Its value is always the same as users.id, by design — see buildPractitionerResource
+    -- in src/fhir/mappers.js, which reuses the account id so the Practitioner/<user.id>
+    -- references that auditService.js and buildProvenanceResource have always emitted
+    -- resolve to a real resource. So the column stores no new *identifier*; what it
+    -- stores is the fact that the resource was created, which is not derivable from the
+    -- users row alone and otherwise requires a cross-table lookup into fhir_resources.
+    --
+    -- DRIFT PATH, stated because a denormalized marker always has one: nothing deletes
+    -- Practitioner resources today, so the column cannot currently go stale. That is a
+    -- property of the current feature set, not a guarantee. Whenever a delete path
+    -- appears — an admin removing a departed clinician from the directory, a
+    -- de-provisioning flow, or an external-system sync that reconciles by deleting rows
+    -- it no longer sees — it must clear this column in the same operation, or the column
+    -- will claim a resource that no longer exists.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS practitioner_id text;
+
     -- force_password_change was originally created as a text column and never
     -- actually used. Convert it to a real boolean, defaulting existing (unset) rows
     -- to false — nobody currently deployed was ever put through a forced-change
