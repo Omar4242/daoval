@@ -14,8 +14,12 @@ resources (Patient, Encounter, Observation, etc.), plus `users`, `login_challeng
 and `access_log` tables for auth and audit.
 
 **Auth:** bcrypt password hashing, email one-time codes as MFA, JWT sessions in an
-HttpOnly/Secure/SameSite cookie. AWS SES for sending the codes (not yet wired to real
-AWS credentials — currently logs codes to the server console in dev mode).
+HttpOnly/Secure/SameSite cookie. Codes are sent over **generic SMTP via `nodemailer`** —
+deliberately not tied to one provider (configured with `SMTP_HOST`/`SMTP_PORT`/
+`SMTP_USER`/`SMTP_PASS`/`SMTP_FROM`). Mailjet is the intended provider, not yet confirmed
+delivering; while SMTP is unconfigured and `NODE_ENV=development`, codes print to the
+server console instead. Earlier notes in this file referring to AWS SES are superseded —
+SES was never wired up (see "What still needs work" below).
 
 **Infrastructure:** Single AWS EC2 instance (t3.small, 2GB RAM — resized up from the
 original t3.micro once memory pressure was a concern), Docker Compose running three
@@ -35,7 +39,8 @@ Encrypt). DuckDNS for the domain (free), since a paid domain wasn't set up yet.
    login throttling (8 failed attempts locks an email for 15 minutes). Tested:
    correct login, wrong password, wrong code, and the rate limit all behave
    correctly.
-3. **Roles and administration.** Added `administrator` / `doctor` / `nurse` roles.
+3. **Roles and administration.** Added `administrator` / `doctor` / `nurse` /
+   `technician` roles (all four enforced by a CHECK constraint on `users.role`).
    Administrators get their own panel to create new accounts (with a one-time
    temporary password) and see everyone provisioned so far. A doctor account was
    confirmed unable to reach the administrator API (403), proving the role check
@@ -87,15 +92,22 @@ Encrypt). DuckDNS for the domain (free), since a paid domain wasn't set up yet.
   ICD-10/SNOMED/RxNorm codes, not a real terminology service.
 - **The visual design pass only touched shared tokens + the sign-in screen.**
   Dashboard and the clinical documentation pages (encounter entry, review & sign,
-  etc.) haven't had the same treatment yet — they'll inherit the improved button/card/
-  input styling automatically, but haven't been individually reviewed.
-- **Self-service password reset doesn't exist.** If someone forgets their password
-  (as opposed to still being on a never-changed temporary one, which is now enforced
-  — see below), an administrator has to manually re-provision their account. Discussed
-  and deliberately deferred — the manual workaround is genuinely fine at this scale.
+  etc.) haven't had the same treatment yet — nor have the screens added since (landing,
+  forgot-password, change-password). They'll inherit the improved button/card/input
+  styling automatically, but haven't been individually reviewed.
 
 ## Recently resolved (this session)
 
+- **Self-service password reset now exists** — previously listed here as deliberately
+  deferred, it was built afterwards and that note was never updated. `POST
+  /auth/forgot-password` issues an emailed code (its own `reset` challenge purpose, not
+  reusable as a login or reauth code) and `POST /auth/reset-password` consumes it to set
+  a new password. Two details worth knowing: the endpoint returns the same `200 {ok:
+  true}` whether or not the account exists, so it can't be used to enumerate emails; and
+  a successful reset deliberately does **not** sign the person in, since it only proves
+  control of the inbox. Reset requests are throttled separately from logins (5 per 15
+  minutes) so hammering one can't lock someone out of the other. UI is
+  `src/pages/ForgotPassword.jsx`.
 - **`force_password_change` is now actually enforced**, not just a dead column.
   Admin-created accounts start with the flag set; login reports it; the frontend
   redirects to a mandatory change-password screen; and — the part that actually
